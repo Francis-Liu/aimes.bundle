@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+
+import aimes.bundle
+
+print "%s (%s)" % (aimes.bundle.version, aimes.bundle.version_detail)
+

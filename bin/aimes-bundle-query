@@ -1,0 +1,174 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import pprint
+import logging
+import optparse
+
+import radical.utils as ru
+import aimes.bundle
+
+DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017/bundle_v0_1/'
+DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
+        
+
+# ------------------------------------------------------------------------------
+#
+def parse_options():
+
+    parser = optparse.OptionParser (add_help_option=False)
+
+    parser.add_option ('-c', '--config-file', dest='config_file', default=None)
+    parser.add_option ('-m', '--mode',        dest='mode',        default='direct') 
+    parser.add_option ('-u', '--url',         dest='url',         default=DEFAULT_MONGODB_URL) 
+    parser.add_option ('-o', '--origin',      dest='origin',      default=None)
+    parser.add_option ('-v', '--verbose',     dest='verbose',     action ='store_true') 
+    parser.add_option ('-h', '--help',        dest='help',        action ='store_true') 
+
+    return parser.parse_args()
+
+
+# ------------------------------------------------------------------------------
+#
+def usage(msg=None):
+
+    if msg:
+        print "\n        ERROR  : %s" % msg
+
+    print """
+        usage  : %s -c <config> [-m <mode>] [-d] [-v]
+        example: %s -c bundle.cfg -m mongodb -u mongodb://localhost/
+
+        options:
+            -c --config-file
+                location of the bundle configuration file (mandatory)
+           
+            -m --mode
+                specify query mode: direct or mongodb (default: direct)
+           
+            -u --url
+                specify communication endpoint for mongodb 
+                default: %s
+           
+            -o --origin
+                the source host for bandwidth queries
+                default: None
+           
+            -v --verbose
+                verbose operation (default: no)
+           
+            -h --help
+                print help (default: no)
+
+
+        modes:
+
+            direct : the bundle module will start agents according to the
+                     config file, collect the information gathered by the
+                     agents, and print them on stdout.
+            mongodb: the bundle manager will quert the specified mongodb,
+                     and dump the data found there.
+
+
+""" % (sys.argv[0], sys.argv[0], DEFAULT_MONGODB_URL)
+
+    if msg :
+        sys.exit (-1)
+
+    else :
+        sys.exit (0)
+        
+
+# ------------------------------------------------------------------------------
+#
+def main(argv=None):
+
+    options, args = parse_options()
+
+    help         = options.help
+    config_file  = options.config_file
+    mode         = options.mode
+    url          = options.url
+    origin       = options.origin
+    verbose      = options.verbose
+
+    if help :
+        usage ()
+
+    if args :
+        usage ("cannot handle arguments %s" % str(args))
+
+    if not config_file and mode == 'direct':
+        usage("config file is mandatory for direct query mode")
+
+    if mode not in ['direct', 'mongodb'] :
+        usage("mode '%s' not supported" % mode)
+
+    if config_file :
+        if not os.path.isfile(config_file):
+            usage("config file %s does not exist" % config_file)
+
+    if verbose:
+        logging.basicConfig(format='%(asctime)s %(levelname)s:%(name)s:%(filename)s:%(lineno)s:%(message)s',
+            level=logging.DEBUG)
+    else:
+        logging.basicConfig(format='%(asctime)s %(levelname)s:%(name)s:%(filename)s:%(lineno)s:%(message)s',
+            level=logging.ERROR)
+
+
+
+    if mode == 'direct' :
+
+        bundle = aimes.bundle.Bundle (query_mode=aimes.bundle.DIRECT_QUERY,
+                                      config_file=config_file, 
+                                      origin=origin)
+
+
+    elif mode == 'mongodb' :
+
+        bundle = aimes.bundle.Bundle (query_mode=aimes.bundle.DB_QUERY, 
+                                      mongodb_url=url, 
+                                      origin=origin)
+
+
+    report = ru.Reporter(title='Bundle API query')
+
+    report.ok ("IDs: %s" % ', '.join (bundle.resources.keys()))
+    
+    for resource_name in bundle.resources:
+        resource = bundle.resources[resource_name]
+    
+        report.header(resource.name)
+
+        print "  num_nodes: %s" % resource.num_nodes
+        print "  container: %s" % resource.container
+        print "  bandwidth: (%s --> %s) : %s MB/s" % \
+            (origin, resource_name, resource.get_bandwidth(origin, 'in'))
+        
+        print "  bandwidth: (%s <-- %s) : %s MB/s" % \
+            (origin, resource_name, resource.get_bandwidth(origin, 'out'))
+    
+        print "  queues   : %s" % ', '.join (resource.queues.keys())
+    
+        for queue_name in resource.queues:
+            queue = resource.queues[queue_name]
+            print
+            print "  queue.name             : %s" % queue.name
+            print "  queue.resource_name    : %s" % queue.resource_name
+            print "  queue.max_walltime     : %s" % queue.max_walltime
+            print "  queue.num_procs_limit  : %s" % queue.num_procs_limit
+            print "  queue.alive_nodes      : %s" % queue.alive_nodes
+            print "  queue.alive_procs      : %s" % queue.alive_procs
+            print "  queue.busy_nodes       : %s" % queue.busy_nodes
+            print "  queue.busy_procs       : %s" % queue.busy_procs
+            print "  queue.free_nodes       : %s" % queue.free_nodes
+            print "  queue.free_procs       : %s" % queue.free_procs
+            print "  queue.num_queueing_jobs: %s" % queue.num_queueing_jobs
+            print "  queue.num_running_jobs : %s" % queue.num_running_jobs
+
+# ------------------------------------------------------------------------------
+#
+if __name__ == "__main__":
+    sys.exit(main())
+
