@@ -10,16 +10,36 @@ __copyright__ = "Copyright 2014, RADICAL"
 __license__ = "MIT"
 
 import os
-import radical.utils as ru
 import aimes.bundle
 
+# the following should be hidden inside aimes.bundle
 # Set environment variables.
-ORIGIN = os.getenv("BUNDLE_ORIGIN")
-BUNDLE_DBURL = os.getenv("BUNDLE_DBURL")
+#ORIGIN = os.getenv("BUNDLE_ORIGIN")
+#BUNDLE_DBURL = os.getenv("BUNDLE_DBURL")
 
-# Create a reporter for the test. Takes care of colors and font attributes.
-report = ru.Reporter(title='Bundle API test')
+####################################################33
+query_condition_1 = {
+    'type' : [ 'Compute', 'Network', 'Storage' ],
+}
+# query all known resources
+# show how to express query conditions
+# show how to identify a resource
+all_resources = aimes.bundle.get_resource_list(condition=query_condition_1)
+for resource_name in all_resources:
+    resource = bundle.resources[resource_name]
+    print resource
 
+# narrow down the selection
+query_condition2 = {}
+
+# create a bundle
+rb1 = aimes.bundle.create_new_resource_bundle()
+rb1.add_resource()
+# call its interfaces
+rb1.get_resource_list()
+# register ownership with the bundle
+
+######################################################
 bundle = aimes.bundle.Bundle(query_mode=aimes.bundle.DB_QUERY,
                              mongodb_url=BUNDLE_DBURL,
                              origin=ORIGIN)
