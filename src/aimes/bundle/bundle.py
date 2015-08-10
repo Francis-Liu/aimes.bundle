@@ -25,6 +25,19 @@ DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017
 DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
 DEFAULT_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl_osg/'
 
+osg_site_list = \
+['AGLT2',
+'BNL-ATLAS',
+'Crane',
+'MWT2',
+'NWICG_NDCMS',
+'Nebraska',
+'UCD',
+'UCSDT2',
+'UConn-OSG',
+'UTA_SWT2',
+'cinvestav']
+
 # -----------------------------------------------------------------------------
 #
 class Bundle(object):
@@ -127,20 +140,26 @@ class Bundle(object):
         self.resources = dict()
         for resource_name in self._priv['cluster_list']:
 
-            config     = self._priv['cluster_config'   ].get (resource_name, dict())
-            workload   = self._priv['cluster_workload' ].get (resource_name, dict())
-            bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
+            if resource_name not in osg_site_list:
+                config     = self._priv['cluster_config'   ].get (resource_name, dict())
+                workload   = self._priv['cluster_workload' ].get (resource_name, dict())
+                bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
 
-            # import pprint
-            # pprint.pprint(bandwidths)
+                # import pprint
+                # pprint.pprint(bandwidths)
 
-            self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
+                self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
 
+            else:
+                pass
 
         # and a list of Queue instances, for all queues of all resources
         self.queues = list()
         for resource in self.resources:
-            self.queues += self.resources[resource].queues.values()
+            if resource_name not in osg_site_list:
+                self.queues += self.resources[resource].queues.values()
+            else:
+                pass
 
         
 # -----------------------------------------------------------------------------
