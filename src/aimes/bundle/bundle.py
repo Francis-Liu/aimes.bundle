@@ -23,7 +23,7 @@ DB_QUERY     = 'db_query'
 
 DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017/bundle_v0_1/'
 DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
-DEFAULT_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl_osg/"
+DEFAULT_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl_osg/'
 
 # -----------------------------------------------------------------------------
 #
