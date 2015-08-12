@@ -23,20 +23,9 @@ DB_QUERY     = 'db_query'
 
 DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017/bundle_v0_1/'
 DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
-DEFAULT_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl_osg/'
+DEFAULT_OSG_CONFIG_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_osg_config/'
+# DEFAULT_OSG_CONFIG_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl_new1/'
 
-osg_site_list = \
-['AGLT2',
-'BNL-ATLAS',
-'Crane',
-'MWT2',
-'NWICG_NDCMS',
-'Nebraska',
-'UCD',
-'UCSDT2',
-'UConn-OSG',
-'UTA_SWT2',
-'cinvestav']
 
 # -----------------------------------------------------------------------------
 #
@@ -52,11 +41,13 @@ class Bundle(object):
     #
     def __init__(self, config_file=None, origin=None, 
                  query_mode=DB_QUERY, 
-                 mongodb_url=DEFAULT_MONGODB_URL):
+                 mongodb_url=DEFAULT_MONGODB_URL,
+                 include_osg=True):
 
         self.config_file = config_file
         self.origin      = origin
         self.mongodb_url = mongodb_url
+        self.include_osg = include_osg
 
         if  query_mode == DIRECT_QUERY :
             self.query_direct ()
@@ -111,6 +102,9 @@ class Bundle(object):
         for resource in self.resources:
             self.queues += self.resources[resource].queues.values()
 
+        if self.include_osg:
+            self.load_osg_resource()
+
 
     # --------------------------------------------------------------------------
     #
@@ -140,28 +134,72 @@ class Bundle(object):
         self.resources = dict()
         for resource_name in self._priv['cluster_list']:
 
-            if resource_name not in osg_site_list:
-                config     = self._priv['cluster_config'   ].get (resource_name, dict())
-                workload   = self._priv['cluster_workload' ].get (resource_name, dict())
-                bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
+            config     = self._priv['cluster_config'   ].get (resource_name, dict())
+            workload   = self._priv['cluster_workload' ].get (resource_name, dict())
+            bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
 
-                # import pprint
-                # pprint.pprint(bandwidths)
+            # import pprint
+            # pprint.pprint(bandwidths)
 
-                self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
+            self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
 
-            else:
-                pass
 
         # and a list of Queue instances, for all queues of all resources
         self.queues = list()
         for resource in self.resources:
-            if resource_name not in osg_site_list:
-                self.queues += self.resources[resource].queues.values()
-            else:
-                pass
+            self.queues += self.resources[resource].queues.values()
 
-        
+        if self.include_osg:
+            self.load_osg_resource()
+
+
+    def load_osg_resource(self, db_url=DEFAULT_OSG_CONFIG_MONGODB_URL):
+        mongo, db, dbname, cname, pname = ru.mongodb_connect (db_url)
+        self.osg_site_list = []
+        for doc in db['config'].aggregate(  { "$group" : { "_id" : "$site" } }  )['result']:
+            self._priv['cluster_list'].append (doc['_id'])
+            # self._priv['cluster_config'][doc['_id']] = doc
+            self.osg_site_list.append( doc['_id'] )
+            self.resources[doc['_id']] = OSGResource(doc['_id'], db.config)    # , db.workload, db.bandwidths)
+
+
+# -----------------------------------------------------------------------------
+#
+class OSGResource(object):
+    """
+    This class ...
+    """
+
+    # --------------------------------------------------------------------------
+    #
+    def __init__(self, name, config, workload=None, bandwidths=None):
+
+        self.name       = name
+        print name
+        self.num_nodes  = config.aggregate( [ { "$match" : {"site" : name} }, { "$group" : {"_id" : "$hostname", "count" : {"$sum" : 1}}} ] )['result'][0]['count']
+        self.container  = 'job'   # FIXME: what are the other options?
+        # self.bandwidths = bandwidths
+        self.queues = dict()
+        for _group in config.aggregate( [ 
+            { "$match" : {"site" : name} },
+            {"$group" : {"_id" : {"num_cores" : "$num_cores", "mips" : "$mips", "mem_size" : "$mem_size"}, "node_list" : {"$addToSet" : "$_id"}}}
+            ] )['result']:
+            _config = _group['_id']
+            queue_name = "num_cores_{}-mips_{}-mem_size_{}".format(_config['num_cores'], _config['mips'], _config['mem_size'])
+            print queue_name
+            self.queues[queue_name] = OSGQueue(self.name, queue_name, _group['node_list'])
+
+
+    # --------------------------------------------------------------------------
+    #
+    def get_bandwidth(self, tgt, mode):
+
+        # if  tgt in self.bandwidths:
+        #     return self.bandwidths[tgt][mode]
+
+        return 0.0
+
+
 # -----------------------------------------------------------------------------
 #
 class Resource(object):
@@ -197,6 +235,34 @@ class Resource(object):
             return self.bandwidths[tgt][mode]
 
         return 0.0
+
+
+# -----------------------------------------------------------------------------
+#
+class OSGQueue(object):
+    """
+    This class represents a set of information on a batch queue of a
+    specific resource.
+    """
+
+    # --------------------------------------------------------------------------
+    #
+    def __init__(self, resource_name, name, node_list, workload=None):
+
+        self.name              = name
+        self.resource_name     = resource_name
+        self.num_nodes         = len(node_list)
+        self.hostname_list     = node_list
+        # self.max_walltime      = config['max_walltime']
+        # self.num_procs_limit   = config['num_procs_limit']
+        # self.alive_nodes       = workload['alive_nodes']
+        # self.alive_procs       = workload['alive_procs']
+        # self.busy_nodes        = workload['busy_nodes']
+        # self.busy_procs        = workload['busy_procs']
+        # self.free_nodes        = workload['free_nodes']
+        # self.free_procs        = workload['free_procs']
+        # self.num_queueing_jobs = workload['num_queueing_jobs']
+        # self.num_running_jobs  = workload['num_running_jobs']
 
 
 # -----------------------------------------------------------------------------
