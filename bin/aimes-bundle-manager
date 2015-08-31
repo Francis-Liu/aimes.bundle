@@ -10,6 +10,7 @@ import aimes.bundle
 
 DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017/bundle_v0_1/'
 DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
+# TODO somehow setenv AIMES_BUNDLE_CONFIG
         
         
 # ------------------------------------------------------------------------------

@@ -1244,6 +1244,10 @@ class SlurmAgent(RemoteBundleAgent, threading.Thread):
             'queue_info' : self.get_queue_config(),
         }
 
+    def get_login_server(self):
+        exit_status, stdout, stderr = self.run_cmd('hostname')
+        self.login_server = stdout.splitlines()[0].strip()
+
     def get_queue_config(self, flag=0):
         exit_status, stdout, stderr = self.run_cmd('sinfo -o "%20P %5a %.10l %20F"')
         if exit_status != 0:

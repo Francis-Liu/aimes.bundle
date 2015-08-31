@@ -5,10 +5,10 @@ __copyright__ = "Copyright 2013, TODO"
 __license__   = "MIT"
 
 
-from api.bundle_manager_intf import BundleManagerIntf as BundleManager
-from bundle import Bundle, Resource, Queue, DIRECT_QUERY, DB_QUERY
-
-import impl
+from exceptions import *
+from session import Session
+from resource_bundle import ResourceBundle, Resource, Queue
+from bundle_manager import BundleManager
 
 
 # ------------------------------------------------------------------------------
