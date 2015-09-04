@@ -14,6 +14,7 @@ import subprocess as sp
 from setuptools import setup, Command, find_packages
 
 name     = 'aimes.bundle'
+mod_root = 'src'
 mod_root = 'src/aimes/bundle'
 
 #-----------------------------------------------------------------------------
@@ -119,14 +120,14 @@ setup_args = {
     'namespace_packages' : ['aimes'],
     'version'            : version,
     'description'        : 'Bundle based Information System for AIMES',
-    'long_description'   : (read('README.md') + '\n\n' + read('CHANGES.md')),
+    'long_description'   : (read('README.rst') + '\n\n' + read('CHANGES.rst')),
     'author'             : 'Francis Liu',
     'author_email'       : 'liux2102@umn.edu',
-    'maintainer'         : '',
-    'maintainer_email'   : '',
-    'url'                : 'http://aimes-project.org/',
+    'maintainer'         : 'Francis Liu',
+    'maintainer_email'   : 'liux2102@umn.edu',
+    'url'                : 'https://github.com/Francis-Liu/aimes.bundle',
     'license'            : 'MIT',
-    'keywords'           : 'aimes bundle manager',
+    'keywords'           : 'aimes bundle',
     'classifiers'        : [
         'Development Status :: 4 - Beta',
         'Intended Audience :: Science/Research',
@@ -152,7 +153,8 @@ setup_args = {
                                  'VERSION', 
                                  'VERSION.git']},
     'data_files'         : [
-        ('%s/etc/' % sys.prefix, ['etc/aimes_bundle_bandwidth.cfg'])
+        # ('%s/etc/' % sys.prefix, ['etc/aimes_bundle_bandwidth.cfg'])
+        ('': ['etc/aimes_bundle_bandwidth.cfg'])
         ],
     'cmdclass'             : {
         'test'             : our_test,
