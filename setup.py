@@ -152,10 +152,7 @@ setup_args = {
     'package_data'       : {'': ['*.cfg', 
                                  'VERSION', 
                                  'VERSION.git']},
-    'data_files'         : [
-        # ('%s/etc/' % sys.prefix, ['etc/aimes_bundle_bandwidth.cfg'])
-        'etc/aimes_bundle_bandwidth.cfg'
-        ],
+    'data_files'         : [('', ['etc/aimes_bundle_bandwidth.cfg'])],
     'cmdclass'             : {
         'test'             : our_test,
     },
