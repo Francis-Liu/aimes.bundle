@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import Queue
 import threading
@@ -11,17 +11,16 @@ import xml.etree.ElementTree as ET
 import re
 import json
 
-try:
-    import paramiko
-except ImportError:
-    logging.critical("Bundle Agent depends on paramiko package installation.")
+import paramiko
 
-class BundleAgent(object):
-    def get_workload(self):
-        raise NotImplementedError()
+from aimes.bundle                 import BundleException
 
-    def get_configuration(self):
-        raise NotImplementedError()
+
+class RemoteBundleAgent(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self._sampling_interval = 60
+        self.queue = Queue.Queue()
 
     def set_verbosity(self, verbose):
        self.debug_level = verbose
@@ -32,10 +31,10 @@ class BundleAgent(object):
        elif verbose > 1:
            self.logger.setLevel(logging.DEBUG)
 
-    def setup_logger(self, hostname, verbose):
-        self.logger = logging.getLogger(hostname)
+    def setup_logger(self, verbose):
+        self.logger = logging.getLogger(uid)
         if not self.logger.handlers:
-            fmt = '%(asctime)-15s {} %(name)-8s %(levelname)-8s %(funcName)s:%(lineno)-4s %(message)s'.format(self.hostname)
+            fmt = '%(asctime)-15s {} %(name)-8s %(levelname)-8s %(funcName)s:%(lineno)-4s %(message)s'.format(self._uid)
             formatter = logging.Formatter(fmt)
             ch = logging.StreamHandler()
             ch.setFormatter(formatter)
@@ -48,18 +47,15 @@ class BundleAgent(object):
         self.critical = self.logger.critical
         self.exception = self.logger.exception
 
-class RemoteBundleAgent(BundleAgent):
     def setup_ssh_connection(self, credential):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect( hostname=self.hostname,
+        self.ssh.connect( hostname=self._login_server,
                           port=credential.get('port', 22),
                           username=credential.get('username'),
                           password=credential.get('password'),
                           key_filename=credential.get('key_filename') )
         self.cmd_prefix = ''
-        #self.debug("connected to {}".format(self.hostname))
-        self.state = 'Up'
 
     def run_cmd(self, cmd, timeout=30):
         try:
@@ -86,614 +82,42 @@ class RemoteBundleAgent(BundleAgent):
 
             exit_status = chan.recv_exit_status()
         except socket.timeout:
-            self.error("Timeout executing '%s' after %d seconds" % (cmd, timeout))
+            print "Timeout executing {} after {} seconds".format(cmd, timeout)
             chan.close()
             raise
         else:
             return exit_status, stdout, stderr
 
-    def close(self):
-        #self.debug('close')
-        if self.queue:
-            self.queue.put("close")
-            self.queue.join()
-            self.queue = None
-        if self.ssh:
-            self.ssh.close()
-            self.ssh = None
-
-class MoabAgent(RemoteBundleAgent, threading.Thread):
-    #Cluster attributes
-    my_type = 'moab'
-    torque_version = ''
-    moab_version = ''
-    alive_nodes = 0
-    alive_procs = 0
-    busy_nodes = 0
-    busy_procs = 0
-    free_nodes = 0
-    free_procs = 0
-    # queue
-    # | name | Max Wallclock Limit | HARD MAXPROC constraint
-        # Up Nodes | Free Nodes | Processors per Node (ncpus) | Up Processors |
-        # Free Processors | Started Flag | Enabled Flag |
-    # Only display queues that are non-acl_user_enable
-    queue_info = {}
-    cmd_prefix = ''
-    # Mark this cluster as heterogenerous, needs check per node np, different
-    # queue may have different set of nodes.
-    h_flag = False
-    default_queue = None
-    default_pool = None
-    properties_nodes = {}
-    pbsnodes_list = {}
-
-    #Agent attributes
-    purgetime = 300
-    sampling_interval = 270 #completed job 5:00
-    max_walltime_all = 0
-    state_reason_code = ""
-    queue = None
-    ssh = None
-    _timer = None
-    job_trace = None
-    debug_level = 0
-
-    def __init__(self, credential, verbose=0, db_dir=None):
-        self.hostname = credential['hostname']
-        self.state = 'INIT'
-
-        #Setup the logger
-        self.logger = logging.getLogger(self.hostname)
-        if not self.logger.handlers:
-            fmt = '%(asctime)-15s {} %(name)-8s %(levelname)-8s %(funcName)s:%(lineno)-4s %(message)s'.format(self.hostname)
-            formatter = logging.Formatter(fmt)
-            ch = logging.StreamHandler()
-            ch.setFormatter(formatter)
-            self.logger.addHandler(ch)
-        self.set_verbosity(verbose)
-        self.debug = self.logger.debug
-        self.info = self.logger.info
-        self.warn = self.logger.warn
-        self.error = self.logger.error
-        self.critical = self.logger.critical
-        self.exception = self.logger.exception
-
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        try:
-            self.ssh.connect( hostname=self.hostname,
-                              port=credential.get('port', 22),
-                              username=credential.get('username'),
-                              password=credential.get('password'),
-                              key_filename=credential.get('key_filename') )
-        except Exception as e:
-            self.error(str(e.__class__) + str(e))
-            raise
-        #else:
-            #self.debug("Connected to {}".format(self.hostname))
-
-        if credential.get('h_flag') == 'True':
-            self.h_flag = True
-
-        #Check if torque/moab is running on this cluster
-        exit_status1, stdout1, stderr1 = self.run_cmd("qstat")
-        exit_status2, stdout2, stderr2 = self.run_cmd("showq")
-
-        if exit_status1 != 0 or exit_status2 != 0:
-            exit_status, stdout, stderr = self.run_cmd("module list")
-            if 'command not found' in stderr:
-                exit_status, stdout, stderr = self.run_cmd("source /etc/profile.d/modules.sh; module list")
-                if 'No such file' in stderr or 'command not found' in stderr:
-                    err_msg = "Unable to locate 'module' on {}: {}".format(self.hostname, stderr)
-                    self.error(err_msg)
-                    raise Exception(err_msg)
-                else:
-                    self.cmd_prefix += "source /etc/profile.d/modules.sh > /dev/null 2>&1; "
-            #module ready
-
-            if 'torque' not in stdout:
-                exit_status, stdout, stderr = self.run_cmd("module load torque")
-                #if 'Unable to locate' in stderr and 'torque' in stderr:
-                if exit_status != 0:
-                    err_msg = "Unable to locate 'torque' on {}: {}".format(self.hostname, stderr)
-                    self.error(err_msg)
-                    raise Exception(err_msg)
-                else:
-                    self.cmd_prefix += "module load torque > /dev/null 2>&1; "
-            #torque ready
-
-            exit_status, stdout, stderr = self.run_cmd("module list")
-            if 'moab' not in stdout:
-                exit_status, stdout, stderr = self.run_cmd("module load moab")
-                #if 'Unable to locate' in stderr and 'moab' in stderr:
-                if exit_status != 0:
-                    err_msg = "Unable to locate 'moab' on {}: {}".format(self.hostname, stderr)
-                    self.error(err_msg)
-                    raise Exception(err_msg)
-                else:
-                    self.cmd_prefix += "module load moab > /dev/null 2>&1; "
-            #moab ready
-
-        self.state = 'Up'
-
-        #Run qstat once to get queue configuration
-        self.get_queue_info()
-
-        #Run showq once to get # of node/proc(s)
-        self.update_node_proc_num()
-
-        # self.load_runtime_history(db_dir)
-
-        if False:
-            _ts = time.time()
-            _st = datetime.datetime.fromtimestamp(_ts).strftime('%Y-%m-%d_%Hh%Mm%Ss.%f')
-            job_trace_filename = 'job_trace_{}_{}'.format(self.hostname, _st)
-            self.job_trace = open(os.path.join(db_dir, job_trace_filename), "w")
-            self.job_trace.write('{}\n'.format(self.hostname))
-            self.exec_showq3()
-        #Start sampling thread
-        threading.Thread.__init__(self, name=self.hostname + " bundle agent")
-        self.queue = Queue.Queue()
+    def start_cmd_loop(self):
         self.setDaemon(True)
         self.start()
 
-        if False:
-            #Set peoriodical sampling timer
-            self._timer = threading.Timer(self.sampling_interval, self.sampling_timer)
-            self._timer.setDaemon(True)
-            self._timer.start()
-
-    def __del__(self):
-        #self.debug("Delete moab cluster on {0}".format(self.hostname))
-        self.close()
-
-    def cluster_type(self):
-        return self.my_type
-
-    def cluster_state(self):
-        return self.state
-
-    def num_procs(self):
-        return self.alive_procs
-
-    def num_nodes(self):
-        return self.alive_nodes
-
-    def workload(self):
-        self.update_node_proc_num()
-        if self.h_flag is True:
-            return {
-                'alive_nodes' : self.alive_nodes,
-                'alive_procs' : self.alive_procs,
-                'busy_nodes' : self.busy_nodes,
-                'busy_procs' : self.busy_procs,
-                'free_nodes' : self.free_nodes,
-                'free_procs' : self.free_procs,
-                'per_pool_workload' : self.properties_nodes
-                }
-        else:
-            return {
-                'alive_nodes' : self.alive_nodes,
-                'alive_procs' : self.alive_procs,
-                'busy_nodes' : self.busy_nodes,
-                'busy_procs' : self.busy_procs,
-                'free_nodes' : self.free_nodes,
-                'free_procs' : self.free_procs
-                }
-
-    def run_cmd(self, cmd, timeout=30):
-        try:
-            chan = self.ssh.get_transport().open_session()
-            chan.settimeout(timeout)
-            #chan.set_combine_stderr(True)
-            chan.exec_command(self.cmd_prefix + cmd)
-
-            stdout = ''
-            while True:
-                recv_buf = chan.recv(65536)
-                if len(recv_buf) == 0:
-                    break
-                else:
-                    stdout += recv_buf
-
-            stderr = ''
-            while True:
-                recv_buf = chan.recv_stderr(65536)
-                if len(recv_buf) == 0:
-                    break
-                else:
-                    stderr += recv_buf
-
-            exit_status = chan.recv_exit_status()
-        except socket.timeout:
-            self.error("Timeout executing '%s' after %d seconds" % (cmd, timeout))
-            chan.close()
-            raise
-        else:
-            return exit_status, stdout, stderr
-
-    # global status
-    def exec_showq1(self):
-        exit_status, stdout, stderr = self.run_cmd("showq --xml")
-        if exit_status != 0:
-            self.state = 'Fault'
-            self.state_reason_code = stderr
-            err_msg = "'showq --xml' return {}: {}".format(exit_status, stderr)
-            self.error(err_msg)
-            raise Exception(err_msg)
-        elif self.state is 'Fault':
-            self.state = 'Up'
-            self.state_reason_code = ''
-
-        root = ET.fromstring(stdout)
-        cluster = root.find('cluster')
-        self.alive_nodes = int(cluster.attrib['LocalUpNodes'])
-        self.alive_procs = int(cluster.attrib['LocalUpProcs'])
-        self.busy_nodes = int(cluster.attrib['LocalActiveNodes'])
-        self.busy_procs = int(cluster.attrib['LocalAllocProcs'])
-        self.free_nodes = int(cluster.attrib['LocalIdleNodes'])
-        self.free_procs = int(cluster.attrib['LocalIdleProcs'])
-        return self.alive_nodes, self.alive_procs, self.busy_nodes, \
-               self.busy_procs, self.free_nodes, self.free_procs
-
-    # running/queueing list
-    def exec_showq2(self, pool=None):
-        exit_status, stdout, stderr = self.run_cmd("showq --xml")
-        if exit_status != 0:
-            err_msg = "'showq --xml' return ({}): stdout({}), stderr({})".format(
-                exit_status, stdout, stderr)
-            self.error(err_msg)
-            raise Exception(err_msg)
-
-        root = ET.fromstring(stdout)
-        cluster = root.find('cluster')
-        cur_time = int(cluster.attrib['time'])
-        cur_alive_nodes = int(cluster.attrib['LocalUpNodes'])
-        cur_busy_nodes = int(cluster.attrib['LocalActiveNodes'])
-        cur_avail_nodes = int(cluster.attrib['LocalIdleNodes'])
-
-        running_list = []
-        queueing_list = []
-        for queue in root.iter('queue'):
-            if queue.attrib['option'] == 'active':
-                for job in queue.findall('job'):
-                    if pool is not None and self.queue_features[job.attrib['Class']] != pool:
-                        continue
-                    #temp solution for clusters don't report ReqNodes
-                    if 'ReqNodes' in job.attrib:
-                        ReqNodes = int(job.attrib['ReqNodes'])
-                    else:
-                        ReqNodes = int(job.attrib['ReqProcs']) / 8 + (1 if int(job.attrib['ReqProcs']) % 8 else 0)
-                    running_list.append( {
-                        'JobID':job.attrib['JobID'],
-                        'Class':job.attrib['Class'],
-                        'Group':job.attrib['Group'],
-                        'User':job.attrib['User'],
-                        'JobName':job.attrib['JobName'],
-                        'ReqNodes':ReqNodes,
-                        'ReqProcs':int(job.attrib['ReqProcs']),
-                        'StartTime':int(job.attrib['StartTime']),
-                        'WallTime':int(job.attrib['ReqAWDuration'])
-                        }
-                    )
-            elif queue.attrib['option'] == 'eligible':
-                for job in queue.findall('job'):
-                    if pool is not None and self.queue_features[job.attrib['Class']] != pool:
-                        continue
-                    if job.attrib['JobName'] == 'poweroff':
-                        continue
-                    #temp solution for clusters don't report ReqNodes
-                    if 'ReqNodes' in job.attrib:
-                        ReqNodes = int(job.attrib['ReqNodes'])
-                    else:
-                        ReqNodes = int(job.attrib['ReqProcs']) / 8 + (1 if int(job.attrib['ReqProcs']) % 8 else 0)
-                    queueing_list.append( {
-                        'JobID':job.attrib['JobID'],
-                        'Class':job.attrib['Class'],
-                        'Group':job.attrib['Group'],
-                        'User':job.attrib['User'],
-                        'JobName':job.attrib['JobName'],
-                        'ReqNodes':ReqNodes,
-                        'ReqProcs':int(job.attrib['ReqProcs']),
-                        'WallTime':int(job.attrib['ReqAWDuration']),
-                        'Priority':int(job.attrib['StartPriority'])
-                        }
-                    )
-        return cur_time, cur_alive_nodes, cur_busy_nodes, cur_avail_nodes, running_list, queueing_list
-
-    # record completed jobs
-    def exec_showq3(self):
-        exit_status, stdout, stderr = self.run_cmd("showq -c --xml")
-        if exit_status != 0:
-            self.state = 'Fault'
-            self.state_reason_code = stderr
-            err_msg = "showq -c --xml: " + stderr
-            self.error(err_msg)
-            raise Exception(err_msg)
-        elif self.state is 'Fault':
-            self.state = 'Up'
-            self.state_reason_code = ''
-
-        root = ET.fromstring(stdout)
-        for queue in root.iter('queue'):
-            if 'option' not in queue.attrib:
-                pass
-            elif queue.attrib['option'] == 'completed':
-                _purgetime = int(queue.attrib['purgetime'])
-                if self.purgetime != _purgetime:
-                    self.warn('purgetime changed from {} to {}'.format(self.purgetime, _purgetime))
-                    if _purgetime < 30:
-                        self.warn("purgetime {} is too short! Can't set an approporiate sampling time".format(_purgetime))
-                    else:
-                        self.purgetime = _purgetime
-                        sampling_interval = _purgetime*9/10
-                for job in queue.findall('job'):
-                    _JobID = job.attrib['JobID']
-                    if _JobID not in self.rtime_tbl:
-                        #begin critical area
-                        self.rtime_tbl[_JobID] = [int(job.attrib['AWDuration']), int(job.attrib['CompletionTime'])]
-                        if 'ReqNodes' in job.attrib:
-                            _job_signature = ( job.attrib['Class'],
-                                               job.attrib['Group'],
-                                               job.attrib['User'],
-                                               job.attrib['JobName'],
-                                               int(job.attrib['ReqNodes']),
-                                               int(job.attrib['ReqProcs']),
-                                               int(job.attrib['ReqAWDuration']) )
-                        else:
-                            _job_signature = ( job.attrib['Class'],
-                                               job.attrib['Group'],
-                                               job.attrib['User'],
-                                               job.attrib['JobName'],
-                                               int(job.attrib['ReqProcs']),
-                                               int(job.attrib['ReqAWDuration']) )
-                        if _job_signature in self.rtime_lkup_tbl:
-                            if int(job.attrib['CompletionTime']) > self.rtime_tbl[self.rtime_lkup_tbl[_job_signature][0]][1]:
-                                self.rtime_lkup_tbl[_job_signature][1] = self.rtime_lkup_tbl[_job_signature][0]
-                                self.rtime_lkup_tbl[_job_signature][0] = _JobID
-                            elif self.rtime_lkup_tbl[_job_signature][1] != -1 and \
-                                int(job.attrib['CompletionTime']) > self.rtime_tbl[self.rtime_lkup_tbl[_job_signature][1]][1]:
-                                self.rtime_lkup_tbl[_job_signature][1] = _JobID
-                        else:
-                            self.rtime_lkup_tbl[_job_signature] = [_JobID, -1]
-                        #self.debug('found newly completed job {} - {}: {}'.format(_JobID, _job_signature, self.rtime_tbl[_JobID]))
-                        if 'ReqNodes' in job.attrib:
-                            self.job_trace.write('JobID={} JobName={} DRMJID={} Class={} Group={} User={} ReqNodes={} ReqProcs={} ReqAWDuration={} State={} CompletionCode={} SubmissionTime={} StartTime={} CompletionTime={} SuspendDuration={} AWDuration={}\n'.format(
-                                job.attrib['JobID'], job.attrib['JobName'], job.attrib['DRMJID'], job.attrib['Class'], job.attrib['Group'], job.attrib['User'], job.attrib['ReqNodes'], job.attrib['ReqProcs'], job.attrib['ReqAWDuration'], job.attrib['State'], job.attrib['CompletionCode'], job.attrib['SubmissionTime'], job.attrib['StartTime'], job.attrib['CompletionTime'], job.attrib['SuspendDuration'], job.attrib['AWDuration']))
-                        else:
-                            self.job_trace.write('JobID={} JobName={} DRMJID={} Class={} Group={} User={} ReqProcs={} ReqAWDuration={} State={} CompletionCode={} SubmissionTime={} StartTime={} CompletionTime={} SuspendDuration={} AWDuration={}\n'.format(
-                                job.attrib['JobID'], job.attrib['JobName'], job.attrib['DRMJID'], job.attrib['Class'], job.attrib['Group'], job.attrib['User'], job.attrib['ReqProcs'], job.attrib['ReqAWDuration'], job.attrib['State'], job.attrib['CompletionCode'], job.attrib['SubmissionTime'], job.attrib['StartTime'], job.attrib['CompletionTime'], job.attrib['SuspendDuration'], job.attrib['AWDuration']))
-                        self.job_trace.flush()
-                        #end critical area
-
-    # run pbsnodes -a to collect info of node status
-    def pbsnodes(self):
-        exit_status, stdout, stderr = self.run_cmd("pbsnodes -a -x")
-        if exit_status != 0:
-            err_msg = "'pbsnodes -a -x' return ({}): stdout({}), stderr({})".format(
-                exit_status, stdout, stderr)
-            self.error(err_msg)
-            raise Exception(err_msg)
-        root = ET.fromstring(stdout)
-        node_list={}
-        for node in root.findall('Node'):
-            #if state == 'free' or state == 'job-exclusive':
-            node_list[node.find('name').text] = [
-                node.find('state').text,
-                int(node.find('np').text),
-                node.find('properties').text,
-                node.find('jobs').text if node.find('jobs') != None else None
-                ]
-        return node_list
-
-    def update_node_proc_num(self, pool=None):
-        if self.h_flag is False:
-            return self.exec_showq1()
-        else:
-            nl = self.pbsnodes()
-            properties_nodes = {}
-            for k, v in nl.items():
-                state, np, properties, jobs = v
-                if properties in self.queue_features.values():
-                    if properties not in properties_nodes:
-                        properties_nodes[properties] = {
-                            'np' : np,
-                            'alive_nodes' : 0,
-                            'alive_procs' : 0,
-                            'busy_nodes' : 0,
-                            'busy_procs' : 0,
-                            'free_nodes' : 0,
-                            'free_procs' : 0
-                            }
-                    if state == 'free' and jobs == None:
-                        properties_nodes[properties]['free_nodes'] += 1
-                        properties_nodes[properties]['free_procs'] += np
-                        properties_nodes[properties]['alive_nodes'] += 1
-                        properties_nodes[properties]['alive_procs'] += np
-                    elif state == 'job-exclusive' or \
-                        (state == 'free' and jobs != None):
-                        properties_nodes[properties]['busy_nodes'] += 1
-                        # TODO fine-grained count partially free procs
-                        properties_nodes[properties]['busy_procs'] += np
-                        properties_nodes[properties]['alive_nodes'] += 1
-                        properties_nodes[properties]['alive_procs'] += np
-            self.pbsnodes_list = nl
-            self.properties_nodes = properties_nodes
-            self.free_nodes = sum([v['free_nodes'] for k, v in properties_nodes.items()])
-            self.free_procs = sum([v['free_procs'] for k, v in properties_nodes.items()])
-            self.busy_nodes = sum([v['busy_nodes'] for k, v in properties_nodes.items()])
-            self.busy_procs = sum([v['busy_procs'] for k, v in properties_nodes.items()])
-            self.alive_nodes = self.free_nodes + self.busy_nodes
-            self.alive_procs = self.free_procs + self.busy_procs
-            if pool is None:
-                return self.alive_nodes, self.alive_procs, \
-                    self.busy_nodes, self.busy_procs, \
-                    self.free_nodes, self.free_procs
-            else:
-                return properties_nodes[pool]['alive_nodes'], \
-                    properties_nodes[pool]['alive_procs'], \
-                    properties_nodes[pool]['busy_nodes'], \
-                    properties_nodes[pool]['busy_procs'], \
-                    properties_nodes[pool]['free_nodes'], \
-                    properties_nodes[pool]['free_procs']
-
-    def get_queue_feature(self, queue_info):
-        exit_status, stdout, stderr = self.run_cmd("showconfig -v")
-        queue_features = {}
-        r = re.compile('[ \[\]=]+')
-        for line_str in stdout.splitlines():
-            if line_str.find('CLASSCFG') == 0:
-                (_,q,_,f,_)=r.split(line_str)
-                if q in queue_info: # Not self.queue_info!
-                    queue_features[q] = f
-        self.queue_features = queue_features
-
-    def get_queue_info(self):
-        exit_status, stdout, stderr = self.run_cmd("qstat -Q -f")
-        #TODO handle failure case
-        _queue_info = {}
-        for line_str in stdout.splitlines():
-            if line_str.find('Queue') == 0:
-                pos = line_str.find(':')
-                queue_name = line_str[pos+1:].strip()
-                _queue_info[queue_name] = {'queue_name' : queue_name}
-            elif line_str.find('=') != -1:
-                queue_attr_k = line_str.lstrip()[:line_str.lstrip().find(' ')]
-                pos1 = line_str.find('=')
-                queue_attr_v = line_str[pos1+1:].strip()
-                if queue_attr_k == 'acl_user_enable':
-                    if (queue_attr_v == 'True'):
-                        _queue_info[queue_name]['restricted_access'] = True
-                elif queue_attr_k == 'resources_max.walltime':
-                    if queue_attr_v.count(':') == 2:
-                        h, m, s = [int(i) for i in queue_attr_v.split(':')]
-                        _queue_info[queue_name]['max_walltime'] = 3600*h+60*m+s
-                    elif queue_attr_v.count(':') == 3:
-                        d, h, m, s = [int(i) for i in queue_attr_v.split(':')]
-                        _queue_info[queue_name]['max_walltime'] = 24*3600*d+3600*h+60*m+s
-                elif queue_attr_k == 'started' or queue_attr_k == 'enabled':
-                    _queue_info[queue_name][queue_attr_k] = queue_attr_v
-        for k,v in _queue_info.items():
-            if ('restricted_access' in v) and (v['restricted_access'] == True):
-                del _queue_info[k]
-
-        if self.h_flag is True:
-            self.get_queue_feature(_queue_info)
-            #TODO check failure
-            for k, v in _queue_info.items():
-                _queue_info[k]['pool'] = self.queue_features[k]
-            self.get_default_queue()
-            #TODO check failure
-            self.default_pool = self.queue_features[self.default_queue]
-
-        self.max_walltime_all = max(v['max_walltime'] for v in _queue_info.values() if 'max_walltime' in v)
-        #self.debug('{} max_walltime = {}'.format(
-        #    self.hostname, 
-        #    str(datetime.timedelta(seconds=self.max_walltime_all)))
-        #)
-
-        self.queue_info = _queue_info
-
-    def max_walltime(self, pool=None):
-        if pool is None:
-            return self.max_walltime_all
-        else:
-            return max(v['max_walltime'] for v in self.queue_info.values() \
-                if v['pool'] == pool)
-
-    def get_default_queue(self):
-        exit_status, stdout, stderr = self.run_cmd('qmgr -c "p s"')
-        if exit_status == 0: # success
-            for line_str in stdout.splitlines():
-                if line_str.find('set server default_queue') != -1:
-                    pos1 = line_str.find('=')
-                    self.default_queue = line_str[pos1+1:].strip()
-                    #self.debug("{} default queue: {}".format(
-                    #    self.hostname, self.default_queue))
-                    break
-        else:
-            self.error(stderr)
-        #print self.default_queue
-        return self.default_queue
-
-    def get_attributes(self):
-        attributes = {}
-        attributes['queue_info'] = self.queue_info
-        if self.h_flag is True:
-            properties_nodes = self.properties_nodes
-            pool_size = {}
-            for k, v in properties_nodes.items():
-                pool_size[k] = {}
-                pool_size[k]['np'] = v['np']
-                pool_size[k]['num_procs'] = v['alive_procs']
-                pool_size[k]['num_nodes'] = v['alive_nodes']
-            attributes['pool'] = pool_size
-        attributes['num_procs'] = self.num_procs()
-        attributes['num_nodes'] = self.num_nodes()
-        attributes['state'] = self.cluster_state()
-        return attributes
-
-    def sampling_timer(self):
-        self.queue.put("showq")
-        #TODO check thread healthy
-        self._timer = threading.Timer(self.sampling_interval, self.sampling_timer)
+    def start_timer(self):
+        self.queue.put("update_config")
+        self.queue.put("update_workload")
+        self._timer = threading.Timer(self._sampling_interval, self.start_timer)
         self._timer.setDaemon(True)
         self._timer.start()
 
     def run(self):
-        self.throt1 = 0
         while True:
             cmd = self.queue.get()
-            if cmd is "showq":
-                #TODO handle failure case
-                #self.debug("run 'showq -c' periodically")
-                try:
-                    self.exec_showq3()
-                except Exception as e:
-                    self.throt1+=1
-                    if self.throt1 < 10:
-                        self.exception('periodically collect complete task trace failed: {} {}'.format(e.__class__, e))
+            if cmd is "update_config":
+                self._update_config()
                 self.queue.task_done()
-                #TODO add lock
+            elif cmd is "update_workload":
+                self._update_workload()
+                self.queue.task_done()
             elif cmd is "close":
-                #self.debug('received "close" command')
                 if self._timer:
                     self._timer.cancel()
-                #self.debug('timer canceled')
                 self.queue.task_done()
-                #self.debug('task done')
                 break
             else:
-                self.error("Unknown command {0}".format(str(cmd)))
+                print "Unkown command {}".format(cmd)
                 self.queue.task_done()
-                continue
-
-    def show_start(self, p_procs, wall_time):
-        exit_status, stdout, stderr = self.run_cmd("showstart --xml {0}@{1}".format(
-                str(p_procs), wall_time))
-        #print "exit_status={} stdout={}".format(exit_status, stdout)
-        #TODO handle failure case
-        if 'job' not in stdout or 'StartTime' not in stdout or 'now' not in stdout:
-            self.error(stdout)
-            return -1
-        else:
-            tree = ET.fromstring(stdout)
-            return int(tree.find('job').attrib['StartTime']) - int(tree.find('job').attrib['now'])
-
-    def set_verbosity(self, verbose):
-       self.debug_level = verbose
-       if verbose == 0:
-           self.logger.setLevel(logging.ERROR)
-       elif verbose == 1:
-           self.logger.setLevel(logging.INFO)
-       elif verbose > 1:
-           self.logger.setLevel(logging.DEBUG)
-       # self.logger.setLevel(logging.ERROR)
 
     def close(self):
-        # self.debug('close')
         if self.queue:
             self.queue.put("close")
             self.queue.join()
@@ -701,8 +125,8 @@ class MoabAgent(RemoteBundleAgent, threading.Thread):
         if self.ssh:
             self.ssh.close()
             self.ssh = None
-        if self.job_trace:
-            self.job_trace.close()
+
+class MoabAgent(RemoteBundleAgent, threading.Thread): pass
 
 backdoor_cluster_num_nodes = {
     'stampede.tacc.xsede.org'  : 6400, # https://www.tacc.utexas.edu/user-services/user-guides/stampede-user-guide
@@ -773,8 +197,7 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
     sampling_interval = 270 #completed job 5:00
 
     def __init__(self, credential, verbose=0, db_dir=None):
-        self.hostname = credential['hostname']
-        self.state = 'INIT'
+        self.hostname = credential['login_server']
         self.queue = None
         super(PbsAgent, self).setup_logger(self.hostname, verbose)
         super(PbsAgent, self).setup_ssh_connection(credential)
@@ -803,9 +226,6 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
 
     def cluster_type(self):
         return self.my_type
-
-    def cluster_state(self):
-        return self.state
 
     def get_configuration(self):
         return {
@@ -1211,8 +631,7 @@ class SlurmAgent(RemoteBundleAgent, threading.Thread):
     my_type = 'slurm'
 
     def __init__(self, credential, verbose=0, db_dir=None):
-        self.hostname = credential['hostname']
-        self.state = 'INIT'
+        self.hostname = credential['login_server']
         self.queue = None
         super(SlurmAgent, self).setup_logger(self.hostname, verbose)
         super(SlurmAgent, self).setup_ssh_connection(credential)
@@ -1234,9 +653,6 @@ class SlurmAgent(RemoteBundleAgent, threading.Thread):
 
     def cluster_type(self):
         return self.my_type
-
-    def cluster_state(self):
-        return self.state
 
     def get_configuration(self):
         return {
@@ -1337,38 +753,269 @@ class SlurmAgent(RemoteBundleAgent, threading.Thread):
     def num_nodes(self):
         return backdoor_cluster_num_nodes[self.hostname]
 
-supported_cluster_types = {
-    "moab" : MoabAgent,
-    "pbs" : PbsAgent,
-    "slurm" : SlurmAgent,
+class CondorAgent(RemoteBundleAgent):
+    """Condor Grid remote access bundle agent
+    """
+    def __init__(self, remote_login, dbs):
+        super(CondorAgent, self).__init__()
+        self._login_server = remote_login["login_server"]
+        self._cluster_type = remote_login["cluster_type"]
+        self._category     = type2category(self._cluster_type)
+        self._dbs          = dbs
+        self._uid          = self._login_server
+        self._config       = None
+        self._workload     = None
+
+        self.setup_ssh_connection(remote_login)
+        self.start_timer()
+        self.start_cmd_loop()
+
+    def __del__(self):
+        self.close()
+
+    def get_config(self):
+        """Return a dict of resource config.
+        """
+        return self._config
+
+    def get_workload(self):
+        """Return a dict of resource workload.
+        """
+        return self._workload
+
+    def _update_config(self):
+        """Push resource config info to db.
+        """
+        site_node_slot = self._query_site_node_slot()
+        if not site_node_slot:
+            print "CondorAgent _update_config() Failed!"
+            return
+
+        config = {
+                "_id"       : self._uid,
+                "timestamp" : datetime.datetime.utcnow(),
+                "category"  : self._category,
+                "num_nodes" : site_node_slot["num_nodes"],
+                "site_info" : {}
+                }
+        for site, info in site_node_slot["site_info"].iteritems():
+            config["site_info"][site] = {
+                    k : info[k] for k in \
+                            ("site_name", "node_list", "num_nodes")
+                    }
+        # only overwrite local copy when successful
+        self._config = config
+        print self._config
+        return
+        self._dbs.update_resource_config(self._config)
+
+    def _update_workload(self):
+        """Push resource config info to db.
+        """
+        site_node_slot = self._query_site_node_slot()
+        if not site_node_slot:
+            print "CondorAgent _update_workload() Failed!"
+            return
+
+        result = self._query_jobs()
+        if not result:
+            print "CondorAgent _update_workload() Failed!"
+            return
+        num_running_jobs, num_queueing_jobs = result
+
+        workload = {
+                "resource_id"       : self._uid,
+                "timestamp"         : datetime.datetime.utcnow(),
+                "num_queueing_jobs" : num_queueing_jobs,
+                "busy_jobslots"     : site_node_slot["busy_jobslots"],
+                "idle_jobslots"     : site_node_slot["idle_jobslots"],
+                }
+        for site, info in site_node_slot["site_info"].iteritems():
+            workload[site] = {
+                    k : info[k] for k in \
+                            ("busy_jobslots", "idle_jobslots")
+                    }
+        # only overwrite local copy when successful
+        self._workload = workload
+        print self._workload
+        return
+        self._dbs.update_resource_workload(self._workload)
+
+    def _query_site_node_slot(self):
+        """Return useful information of site, node, job slot.
+        """
+        exit_status, stdout, stderr = self.run_cmd(
+                "condor_status -pool osg-flock.grid.iu.edu -state -format '%s' GLIDEIN_Site -format ' %s' Machine -format ' %s\n' State | sort | uniq -c"
+                )
+
+        if exit_status != 0:
+            print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}".format(
+                    exit_status, stdout, stderr)
+            return None
+        else:
+            try:
+                site_node_slot = {
+                        "num_nodes"     : 0,
+                        "busy_jobslots" : 0,
+                        "idle_jobslots" : 0,
+                        "site_info"     : {},
+                        }
+
+                for l in stdout.splitlines():
+                    l_token = l.strip().split()
+                    if len(l_token) == 4:
+                        _count, _site, _node, _state = l_token
+                        _count = int(_count)
+
+                        if _site not in site_node_slot["site_info"]:
+                            site_node_slot["site_info"][_site] = {
+                                    "site_name"  : _site,
+                                    "node_list"  : [],
+                                    "num_nodes"  : 0, # == len(node_list)
+                                    "busy_jobslots" : 0,
+                                    "idle_jobslots" : 0,
+                                    }
+                        _site_info = site_node_slot["site_info"][_site]
+                        if _node not in _site_info["node_list"]:
+                            _site_info["node_list"].append(_node)
+                            _site_info["num_nodes"]     += 1
+                            site_node_slot["num_nodes"] += 1
+
+                        if _state == "Unclaimed":
+                            site_node_slot["idle_jobslots"] += _count
+                            _site_info["idle_jobslots"]     += _count
+                        elif _state == "Claimed":
+                            site_node_slot["busy_jobslots"] += _count
+                            _site_info["busy_jobslots"]     += _count
+                        elif _state == "Preempting":
+                            pass
+                        else:
+                            # raise BundleException("Unknown State {}: {}".format(_state, l))
+                            print "Unknown State {}: {}".format(_state, l)
+
+                return site_node_slot
+            except Exception as e:
+                print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}\n{}".format(
+                        stdout, stderr, str(e.__class__), str(e))
+                return None
+
+    def _query_jobs(self):
+        """Query the total number of running/idle/held jobs.
+
+            $ condor_status -pool osg-flock.grid.iu.edu -schedd -total
+                      TotalRunningJobs      TotalIdleJobs      TotalHeldJobs
+
+
+               Total             18464             152011               2573
+
+           Return:
+               Success - [TotalRunningJobs, TotalIdleJobs]
+               Failure - None
+        """
+        exit_status, stdout, stderr = self.run_cmd(
+                "condor_status -pool osg-flock.grid.iu.edu -schedd -total"
+                )
+
+        if exit_status != 0:
+            print "CondorAgent _query_total_jobs failed:\n{}\n{}\n{}".format(
+                    exit_status, stdout, stderr)
+            return None
+        else:
+            try:
+                return [int(n) for n in\
+                        stdout.splitlines()[-1].strip().split()[1:3]]
+            except Exception as e:
+                print "CondorAgent _query_total_jobs failed:\n{}\n{}".format(
+                        stdout, stderr)
+                return None
+
+    def _query_job_slots(self, site=None):
+        """Query the total number of busy/idle/retiring machines.
+
+            $ condor_status -pool osg-flock.grid.iu.edu -state -total
+                      Machines Owner Unclaimed Claimed Preempting Matched
+
+        Benchmarking         8     0         8       0          0       0
+                Busy     15663     0         0   15663          0       0
+                Idle       256     0       174      82          0       0
+            Retiring        30     0         0      30          0       0
+
+               Total     15957     0       182   15775          0       0
+
+           Return:
+               Success - [TotalMachines, BusyMachines, IdleMachines]
+               Failure - None
+        """
+        exit_status, stdout, stderr = self.run_cmd(
+                "condor_status -pool osg-flock.grid.iu.edu -state -total"
+                )
+
+        if exit_status != 0:
+            print "CondorAgent _query_total_machines failed:\n{}\n{}\n{}".format(
+                    exit_status, stdout, stderr)
+            return None
+        else:
+            try:
+                BusyClaimed   = 0
+                IdleUnclaimed = 0
+                IdleClaimed   = 0
+                for line in stdout.splitlines():
+                    line = line.strip()
+                    if  line.startswith('Busy'):
+                        BusyClaimed = int(line.split()[4])
+                    elif line.startswith('Idle'):
+                        line_token    = line.split()
+                        IdleUnclaimed = int(line_token[3])
+                        IdleClaimed   = int(line_token[4])
+                return [BusyClaimed+IdleUnclaimed+IdleClaimed,\
+                        BusyClaimed+IdleClaimed, IdleUnclaimed]
+            except Exception as e:
+                print "CondorAgent _query_total_jobs failed:\n{}\n{}".format(
+                        stdout, stderr)
+                return None
+
+
+supported_types = {
+    "moab"     : MoabAgent,
+    "pbs"      : PbsAgent,
+    "slurm"    : SlurmAgent,
+    "condor"   : CondorAgent,
 }
 
-def create(cluster_attributes, db_dir=None, verbosity=0):
+def type2category(Type):
+    if Type in ["moab", "pbs", "slurm"]:
+        return "hpc"
+    elif Type in ["condor"]:
+        return "grid"
+    else:
+        return None
+
+def create(resource_config, db_dir=None, verbosity=0):
     try:
-        if cluster_attributes['cluster_type'].lower() == 'moab':
-            if cluster_attributes['hostname'].lower().startswith('india'):
-                cluster_attributes['h_flag'] = True
+        if resource_config["cluster_type"].lower() == 'moab':
+            if resource_config['login_server'].lower().startswith('india'):
+                resource_config['h_flag'] = True
             return MoabAgent(
-                cluster_attributes,
+                resource_config,
                 verbosity,
                 db_dir
                 )
-        elif cluster_attributes['cluster_type'].lower() == 'pbs':
+        elif resource_config["cluster_type"].lower() == 'pbs':
             return PbsAgent(
-                cluster_attributes,
+                resource_config,
                 verbosity,
                 db_dir
                 )
-        elif cluster_attributes['cluster_type'].lower() == 'slurm':
-            if cluster_attributes['hostname'].lower().startswith('stampede'):
+        elif resource_config["cluster_type"].lower() == 'slurm':
+            if resource_config['login_server'].lower().startswith('stampede'):
                 return SlurmAgent(
-                    cluster_attributes,
+                    resource_config,
                     verbosity,
                     db_dir
                     )
             else:
-                logging.error("Unsupported slurm cluster: {}".format(cluster_attributes['hostname']))
-        logging.error("Unknown cluster type: {}".format(cluster_attributes['type']))
+                logging.error("Unsupported slurm cluster: {}".format(resource_config['login_server']))
+        logging.error("Unknown cluster type: {}".format(resource_config["cluster_type"]))
     except Exception as e:
         logging.exception('bundle agent creation failure!')
 

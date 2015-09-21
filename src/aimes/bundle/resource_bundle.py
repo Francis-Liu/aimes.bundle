@@ -1,112 +1,103 @@
+# -*- coding: utf-8 -*-
+"""Resource & Resource Bundle
 
-__author__    = "Francis Liu, Matteo Turilli, Andre Merzky"
-__copyright__ = "Copyright 2013-2014, The AIMES Project"
-__license__   = "MIT"
+Resource:
+    This module defines different types of resources such as the compute
+    resource and the network resource. Conceptually, a resource object is
+    the most fine-grained entity which can be independently characterized.
 
+    On an HPC cluster for example, a user submit his/her job to a particular
+    queue. The queue could be viewed as the end-point of compute resource,
+    despite that it contains multiple compute nodes. Since usually nodes
+    within a queue are homogeneous in terms of core-count, processor type,
+    and memory size, we can characterize a queue with the configuration of
+    any of its compute nodes and the total number of nodes.
+
+    On a Grid such as OSG, a job is launched to a single node. Each node
+    could be seen as an independent compute resource unit.
+
+    Resource has, by and large, two types of info, namely static and
+    dynamic. Typical static info are configurations, which ideally should
+    not constant change. Dynamic info include workload. The creator of these
+    resource class are in charge of guarantee the number and statistics of
+    each resource are up-to-date. However, this could be done in a "Lazy"
+    way - only update data once being accessed.
+
+Resource Bundle:
+
+Furthermore, in OSG, a user is given quite a
+few options to specify a group of nodes all satisfying certain conditions to
+allocate from. We can view such groups of nodes as a compute resource
+bundle.
+"""
+
+import os
+from UserDict import UserDict
 
 import radical.utils as ru
 import saga
-import os
 
-# -----------------------------------------------------------------------------
-#
 # DEFAULT_MONGODB_URL = 'mongodb://ec2-184-72-89-141.compute-1.amazonaws.com:27017/bundle_v0_1/'
 # DEFAULT_MONGODB_URL = 'mongodb://localhost:27017/bundle_v0_1/'
 DEFAULT_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_fengl/'
 DEFAULT_OSG_CONFIG_MONGODB_URL = 'mongodb://54.221.194.147:24242/AIMES_bundle_osg_config/'
 
 
-# -----------------------------------------------------------------------------
-#
-class ResourceBundle(object):
+class HpcQueue(UserDict):
+    """This class represents a batch queue of HPC clusters.
 
-    # --------------------------------------------------------------------------
-    #
-    def __init__(self, mongodb_url=DEFAULT_MONGODB_URL):
+    This class is a dict like wrapper class which encapsulates per-queue
+    information.
+    """
 
-        # self.mongodb_url = mongodb_url
-        self.mongodb_url = DEFAULT_MONGODB_URL
+    def __init__(self, qname, cname):
+        UserDict.__init__(self)
+        self["name"] = qname
+        self["cluster"] = cname
+        self["uid"] = "{}.{}".format(qname, cname)
+        self["last_update_timestamp"] = 0
 
-        self.query_db()
+class HpcCluster(UserDict):
+    """This class represents a batch queue based HPC cluster.
 
+    This class is a dict like wrapper class which encapsulates cluster-wide
+    information.
+    """
 
-    # --------------------------------------------------------------------------
-    #
-    @staticmethod
-    def create(bundle_description, bundle_manager_id):
-        bundle = ResourceBundle()
-        return bundle
+    def __init__(self, name, db_session):
+        UserDict.__init__(self)
+        self["name"] = name
+        self._db_session = db_session
+        self["uid"] = "{}".format(name)
+        self['queues'] = {}
+        self['num_nodes'] = 0
+        self['num_cores'] = 0
+        self._query_db()
 
+    def update_status(self):
+        """Query db to set all data to up-to-date values
+        """
+        self._query_db()
 
-    # --------------------------------------------------------------------------
-    #
-    def query_db(self):
+    def _query_db(self):
+        """Do the actual work
+        """
+        timestamp, config, workload = self._db_session.get_hpc_cluster_info(self["name"])
 
-        mongo, db, dbname, cname, pname = ru.mongodb_connect(self.mongodb_url)
+class OsgSite(object):
+    def __init__(self, name):
+        self["name"] = name
 
-        self._priv = dict()
-        self._priv['cluster_list']      = list()
-        self._priv['cluster_config']    = dict()
-        self._priv['cluster_workload']  = dict()
-        self._priv['cluster_bandwidth'] = dict()
+class NetworkConnection(object):
+    def __init__(self, name):
+        self["name"] = name
 
-
-        for doc in list(db['config'].find ()):
-            self._priv['cluster_list'].append (doc['_id'])
-            self._priv['cluster_config'][doc['_id']] = doc
-
-        for doc in list(db['workload'].find ()):
-            self._priv['cluster_workload'][doc['_id']] = doc
-
-        for doc in list(db['bandwidth'].find ()):
-            self._priv['cluster_bandwidth'][doc['_id']] = doc
-
-
-        # we have a dictionary of Resources instances, indexed by resource name
-        self.resources = dict()
-        for resource_name in self._priv['cluster_list']:
-
-            config     = self._priv['cluster_config'   ].get (resource_name, dict())
-            workload   = self._priv['cluster_workload' ].get (resource_name, dict())
-            bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
-
-            self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
-
-
-        # and a list of Queue instances, for all queues of all resources
-        self.queues = list()
-        for resource in self.resources:
-            self.queues += self.resources[resource].queues.values()
-
-        self.load_osg_resource()
-
-
-    def load_osg_resource(self, db_url=DEFAULT_OSG_CONFIG_MONGODB_URL):
-        mongo, db, dbname, cname, pname = ru.mongodb_connect (db_url)
-        self.osg_site_list = []
-        for doc in db['config'].aggregate(  { "$group" : { "_id" : "$site" } }  )['result']:
-            self._priv['cluster_list'].append (doc['_id'])
-            # self._priv['cluster_config'][doc['_id']] = doc
-            self.osg_site_list.append( doc['_id'] )
-            self.resources[doc['_id']] = OSGResource(doc['_id'], db.config)    # , db.workload, db.bandwidths)
-
-
-    def list_resources(self):
-        for resource in self.resources:
-            print resource
-
-
-# -----------------------------------------------------------------------------
-#
 class OSGResource(object):
 
-    # --------------------------------------------------------------------------
-    #
     def __init__(self, name, config, workload=None, bandwidths=None):
 
         self.name       = name
         self.num_nodes  = config.aggregate( [ { "$match" : {"site" : name} }, { "$group" : {"_id" : "$hostname", "count" : {"$sum" : 1}}} ] )['result'][0]['count']
-        self.container  = 'job'   # FIXME: what are the other options?
         # self.bandwidths = bandwidths
         self.queues = dict()
         for _group in config.aggregate( [ 
@@ -119,8 +110,6 @@ class OSGResource(object):
             self.queues[queue_name] = OSGQueue(self.name, queue_name, _group['node_list'])
 
 
-    # --------------------------------------------------------------------------
-    #
     def get_bandwidth(self, tgt, mode):
 
         # if  tgt in self.bandwidths:
@@ -129,22 +118,12 @@ class OSGResource(object):
         return 0.0
 
 
-# -----------------------------------------------------------------------------
-#
 class Resource(object):
-    """
-    This class represents a set of information on a resource.
-    Specifically, the class also has a list of Queue instances, which
-    represent information about the resource's batch queues.
-    """
 
-    # --------------------------------------------------------------------------
-    #
     def __init__(self, name, config, workload, bandwidths):
 
         self.name       = name
         self.num_nodes  = config['num_nodes']
-        self.container  = 'job'   # FIXME: what are the other options?
         self.bandwidths = bandwidths
 
         # we have a list of Queue instances, to inspect queue information,
@@ -156,8 +135,6 @@ class Resource(object):
                                             workload[queue_name])
 
 
-    # --------------------------------------------------------------------------
-    #
     def get_bandwidth(self, tgt, mode):
 
         if  tgt in self.bandwidths:
@@ -229,16 +206,12 @@ class Resource(object):
 def parse_iperf_result(output_file):
     f = open(output_file)
 
-# -----------------------------------------------------------------------------
-#
 class OSGQueue(object):
     """
     This class represents a set of information on a batch queue of a
     specific resource.
     """
 
-    # --------------------------------------------------------------------------
-    #
     def __init__(self, resource_name, name, node_list, workload=None):
 
         self.name              = name
@@ -256,8 +229,6 @@ class OSGQueue(object):
         # self.num_queueing_jobs = workload['num_queueing_jobs']
         # self.num_running_jobs  = workload['num_running_jobs']
 
-    #---------------------------------------------------------------------------
-    #
     def as_dict(self):
         object_dict = {
             "name"              : self.name,
@@ -268,22 +239,15 @@ class OSGQueue(object):
         return object_dict
 
 
-    #---------------------------------------------------------------------------
-    #
     def __str__(self):
         return str(self.as_dict())
 
 
-# -----------------------------------------------------------------------------
-#
 class Queue(object):
-    """
-    This class represents a set of information on a batch queue of a
+    """This class represents a set of information on a batch queue of a
     specific resource.
     """
 
-    # --------------------------------------------------------------------------
-    #
     def __init__(self, resource_name, name, config, workload):
 
         self.name              = name
@@ -299,8 +263,6 @@ class Queue(object):
         self.num_queueing_jobs = workload['num_queueing_jobs']
         self.num_running_jobs  = workload['num_running_jobs']
 
-    #---------------------------------------------------------------------------
-    #
     def as_dict(self):
         object_dict = {
             "name"              : self.name,
@@ -318,8 +280,78 @@ class Queue(object):
         }
         return object_dict
 
-    #---------------------------------------------------------------------------
-    #
     def __str__(self):
         return str(self.as_dict())
+
+
+class ResourceBundle(object):
+
+    def __init__(self, mongodb_url=DEFAULT_MONGODB_URL):
+
+        # self.mongodb_url = mongodb_url
+        self.mongodb_url = DEFAULT_MONGODB_URL
+
+        self.query_db()
+
+
+    @staticmethod
+    def create(bundle_description, bundle_manager_id):
+        bundle = ResourceBundle()
+        return bundle
+
+
+    def query_db(self):
+
+        mongo, db, dbname, cname, pname = ru.mongodb_connect(self.mongodb_url)
+
+        self._priv = dict()
+        self._priv['cluster_list']      = list()
+        self._priv['cluster_config']    = dict()
+        self._priv['cluster_workload']  = dict()
+        self._priv['cluster_bandwidth'] = dict()
+
+
+        for doc in list(db['config'].find ()):
+            self._priv['cluster_list'].append (doc['_id'])
+            self._priv['cluster_config'][doc['_id']] = doc
+
+        for doc in list(db['workload'].find ()):
+            self._priv['cluster_workload'][doc['_id']] = doc
+
+        for doc in list(db['bandwidth'].find ()):
+            self._priv['cluster_bandwidth'][doc['_id']] = doc
+
+
+        # we have a dictionary of Resources instances, indexed by resource name
+        self.resources = dict()
+        for resource_name in self._priv['cluster_list']:
+
+            config     = self._priv['cluster_config'   ].get (resource_name, dict())
+            workload   = self._priv['cluster_workload' ].get (resource_name, dict())
+            bandwidths = self._priv['cluster_bandwidth'].get (resource_name, dict())
+
+            self.resources[resource_name] = Resource(resource_name, config, workload, bandwidths)
+
+
+        # and a list of Queue instances, for all queues of all resources
+        self.queues = list()
+        for resource in self.resources:
+            self.queues += self.resources[resource].queues.values()
+
+        self.load_osg_resource()
+
+
+    def load_osg_resource(self, db_url=DEFAULT_OSG_CONFIG_MONGODB_URL):
+        mongo, db, dbname, cname, pname = ru.mongodb_connect (db_url)
+        self.osg_site_list = []
+        for doc in db['config'].aggregate(  { "$group" : { "_id" : "$site" } }  )['result']:
+            self._priv['cluster_list'].append (doc['_id'])
+            # self._priv['cluster_config'][doc['_id']] = doc
+            self.osg_site_list.append( doc['_id'] )
+            self.resources[doc['_id']] = OSGResource(doc['_id'], db.config)    # , db.workload, db.bandwidths)
+
+
+    def list_resources(self):
+        for resource in self.resources:
+            print resource
 
