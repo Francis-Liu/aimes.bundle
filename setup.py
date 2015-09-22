@@ -14,7 +14,6 @@ import subprocess as sp
 from setuptools import setup, Command, find_packages
 
 name     = 'aimes.bundle'
-mod_root = 'src'
 mod_root = 'src/aimes/bundle'
 
 #-----------------------------------------------------------------------------
@@ -149,11 +148,9 @@ setup_args = {
     'scripts'            : ['bin/aimes-bundle-manager', 
                             'bin/aimes-bundle-query', 
                             'bin/aimes-bundle-version'],
-    'package_data'       : {'': ['*.cfg', 
-                                 'VERSION', 
-                                 'VERSION.git']},
+    'package_data'       : {'': ['*.cfg', 'VERSION', 'VERSION.git']},
     'data_files'         : [
-        ('%s/etc/' % sys.prefix, ['etc/aimes_bundle_bandwidth.cfg'])
+        ('%s/etc/' % sys.prefix, ["%s/configs/aimes_bundle_resources.conf" % mod_root])
         ],
     'cmdclass'             : {
         'test'             : our_test,

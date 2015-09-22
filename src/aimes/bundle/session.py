@@ -7,10 +7,9 @@ import logging
 from aimes.bundle                 import BundleException
 from aimes.bundle.db              import DBException
 from aimes.bundle.db              import Session as dbSession
-# from aimes.bundle.controller      import BundleAgentController
-# from aimes.bundle.bundle_manager  import BundleManager
+from aimes.bundle.bundle_manager  import BundleManager
 # from aimes.bundle                 import resource_bundle
-import aimes.bundle.agent as BundleAgent
+from aimes.bundle.agent           import BundleAgent
 
 import radical.utils      as ru
 
@@ -18,7 +17,7 @@ import radical.utils      as ru
 class Session(ru.Daemon):
     """Session class
     """
-    def __init__(self, database_url, database_name="aimes.bundle",
+    def __init__(self, database_url=None, database_name="AIMES_bundle",
                  uid=None):
         self._database_url          = database_url
         self._database_name         = database_name
@@ -27,7 +26,7 @@ class Session(ru.Daemon):
         self._dbs                   = None
         self._dbs_metadata          = None
         self._dbs_connection_info   = None
-        self._agent_list            = None
+        self._agent_list            = {}
 
         if  not self._database_url:
             self._database_url = os.getenv("AIMES_BUNDLE_DBURL", None)
@@ -40,7 +39,7 @@ class Session(ru.Daemon):
             print "Initializing AIMES.Bundle session:"
             print "Step (1 of 4): setup database session               ...",
             try:
-                self._uid = ru.generate_id('aimes.bundle.session',
+                self._uid = ru.generate_id('aimes_bundle.session',
                                   mode=ru.ID_PRIVATE)
 
                 self._dbs, self._dbs_metadata, self._dbs_connection_info = \
@@ -49,31 +48,42 @@ class Session(ru.Daemon):
                                       db_name = database_name)
             except Exception as e:
                 print "Failed"
-                raise BundleException(str(e))
+                logging.exception("{}:{}".format(str(e.__class__), str(e)))
+                raise BundleException("Session.__init__: db setup Failed!")
             print "Success"
 
             print "Step (2 of 4): process resource configuration files ...",
             # load resource config file, parse it into dict
             config_file = os.getenv("AIMES_BUNDLE_CONFIG", None)
             if not config_file:
-                module_path  = os.path.dirname(os.path.abspath(__file__))
-                default_cfgs = "{}/configs/*.conf".format(module_path)
-                config_files = glob.glob(default_cfgs)
-            else:
-                config_files = [config_file, ]
+                print "Failed"
+                # TODO drop db.session
+                raise BundleException("no resource config file (set AIMES_BUNDLE_CONFIG)")
+            # if not config_file:
+            #     module_path  = os.path.dirname(os.path.abspath(__file__))
+            #     default_cfgs = "{}/configs/*.conf".format(module_path)
+            #     config_files = glob.glob(default_cfgs)
+            # else:
+            #     config_files = [config_file, ]
 
-            for config_file in config_files:
-                try:
-                    rcs = self.load_resource_config_file(config_file=config_file)
-                except Exception as e:
-                    print "skip config file {}: {}".format(str(config_file),
-                            str(e))
-                    continue
+            # for config_file in config_files:
+            #     try:
+            #         rcs = self.load_resource_config_file(config_file=config_file)
+            #     except Exception as e:
+            #         print "skip config file {}: {}".format(str(config_file),
+            #                 str(e))
+            #         continue
+            #     for rc in rcs:
+            #         self._resource_list[rc] = rcs[rc]
+            try:
+                rcs = self.load_resource_config_file(config_file=config_file)
                 for rc in rcs:
                     self._resource_list[rc] = rcs[rc]
-            if len(self._resource_list) == 0:
+            except Exception as e:
                 print "Failed"
-                raise BundleException("No resource config file detected")
+                logging.exception("{}:{}".format(str(e.__class__), str(e)))
+                raise BundleException("Session.__init__: parsing resource config file Failed!")
+
             # push resource list to db
             self._dbs.add_resource_list(resource_list=self._resource_list)
             print "Success"
@@ -135,8 +145,7 @@ class Session(ru.Daemon):
                         _missing_key = True
                         break
                 if not _missing_key:
-                    if not BundleAgentController.support_resource_type(
-                                _c['cluster_type']):
+                    if _c['cluster_type'] not in BundleAgent.supported_types:
                         logging.error("Unsupported resource type '{}': {}".format(
                                 _c['cluster_type'], _l))
                         continue

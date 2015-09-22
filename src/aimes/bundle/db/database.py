@@ -35,6 +35,8 @@ Examples:
 
 Notes:
     In db, uid for each resource are converted by ip2id().
+
+    Based on pymongo 2.8 API
 """
 _DBVersion="1.0.0"
 
@@ -58,7 +60,7 @@ class DBException(Exception):
 class Session():
     """This class encapsulates db access methods.
     """
-    def __init__(self, db_url, db_name="aimes.bundle"):
+    def __init__(self, db_url, db_name="AIMES_bundle"):
         url = ru.Url(db_url)
         if db_name:
             url.path = db_name
@@ -89,7 +91,7 @@ class Session():
         self._bw  = None
 
     @staticmethod
-    def new(sid, db_url, db_name="aimes.bundle"):
+    def new(sid, db_url, db_name="AIMES_bundle"):
         """Creates a new session (factory method).
         """
         creation_time = datetime.datetime.utcnow()
@@ -121,7 +123,7 @@ class Session():
                     "created"   : creation_time,
                     "connected" : creation_time,
                     "version"   : _DBVersion}
-        self._s.insert_one(metadata)
+        self._s.insert(metadata)
 
         # Namespaced subcollections separated by the . character are
         # syntactic suger, subcollections has no relationship with root
@@ -132,7 +134,7 @@ class Session():
         self._bw = self._db["{}.resource.bandwidth".format(sid)]
 
     @staticmethod
-    def reconnect(sid, db_url, db_name="aimes.bundle"):
+    def reconnect(sid, db_url, db_name="AIMES_bundle"):
         """Reconnects to an existing session.
         """
         dbs = Session(db_url, db_name)
@@ -158,7 +160,7 @@ class Session():
         if self._s.find({"_id": sid}).count() != 1:
             raise DBException("DB session {} metadata doesn't exist.".format(sid))
 
-        self._s.update_one({"_id"  : sid},
+        self._s.update({"_id"  : sid},
                        {"$set" : {"connected" : datetime.datetime.utcnow()}})
 
         self._session_id = sid
@@ -188,16 +190,16 @@ class Session():
         for d in docs:
             d["_id"] = ip2id(d["login_server"])
 
-        self._r.insert_many(docs)
+        self._r.insert(docs)
 
     def update_resource_config(self, config):
         save_id = config["_id"]
         config["_id"] = ip2id(config["_id"])
-        self._rc.replace_one(
+        self._rc.update(
                 {"_id" : config["_id"]}, config, upsert=True)
         config["_id"] = save_id
 
     def update_resource_workload(self, workload):
-        self._rw.replace_one(
+        self._rw.update(
                 {"resource_id" : workload["resource_id"]}, workload, upsert=True)
 

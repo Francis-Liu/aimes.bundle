@@ -17,8 +17,9 @@ from aimes.bundle                 import BundleException
 
 
 class RemoteBundleAgent(threading.Thread):
-    def __init__(self):
-        threading.Thread.__init__(self)
+    def __init__(self, uid):
+        self._uid = uid
+        threading.Thread.__init__(self, name=self._uid + " bundle agent")
         self._sampling_interval = 60
         self.queue = Queue.Queue()
 
@@ -757,12 +758,12 @@ class CondorAgent(RemoteBundleAgent):
     """Condor Grid remote access bundle agent
     """
     def __init__(self, remote_login, dbs):
-        super(CondorAgent, self).__init__()
+        super(CondorAgent, self).__init__(
+                remote_login["login_server"])
         self._login_server = remote_login["login_server"]
         self._cluster_type = remote_login["cluster_type"]
         self._category     = type2category(self._cluster_type)
         self._dbs          = dbs
-        self._uid          = self._login_server
         self._config       = None
         self._workload     = None
 
@@ -806,7 +807,6 @@ class CondorAgent(RemoteBundleAgent):
         # only overwrite local copy when successful
         self._config = config
         print self._config
-        return
         self._dbs.update_resource_config(self._config)
 
     def _update_workload(self):
@@ -838,66 +838,64 @@ class CondorAgent(RemoteBundleAgent):
         # only overwrite local copy when successful
         self._workload = workload
         print self._workload
-        return
         self._dbs.update_resource_workload(self._workload)
 
     def _query_site_node_slot(self):
         """Return useful information of site, node, job slot.
         """
-        exit_status, stdout, stderr = self.run_cmd(
-                "condor_status -pool osg-flock.grid.iu.edu -state -format '%s' GLIDEIN_Site -format ' %s' Machine -format ' %s\n' State | sort | uniq -c"
-                )
-
-        if exit_status != 0:
-            print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}".format(
-                    exit_status, stdout, stderr)
-            return None
-        else:
-            try:
-                site_node_slot = {
-                        "num_nodes"     : 0,
-                        "busy_jobslots" : 0,
-                        "idle_jobslots" : 0,
-                        "site_info"     : {},
-                        }
-
-                for l in stdout.splitlines():
-                    l_token = l.strip().split()
-                    if len(l_token) == 4:
-                        _count, _site, _node, _state = l_token
-                        _count = int(_count)
-
-                        if _site not in site_node_slot["site_info"]:
-                            site_node_slot["site_info"][_site] = {
-                                    "site_name"  : _site,
-                                    "node_list"  : [],
-                                    "num_nodes"  : 0, # == len(node_list)
-                                    "busy_jobslots" : 0,
-                                    "idle_jobslots" : 0,
-                                    }
-                        _site_info = site_node_slot["site_info"][_site]
-                        if _node not in _site_info["node_list"]:
-                            _site_info["node_list"].append(_node)
-                            _site_info["num_nodes"]     += 1
-                            site_node_slot["num_nodes"] += 1
-
-                        if _state == "Unclaimed":
-                            site_node_slot["idle_jobslots"] += _count
-                            _site_info["idle_jobslots"]     += _count
-                        elif _state == "Claimed":
-                            site_node_slot["busy_jobslots"] += _count
-                            _site_info["busy_jobslots"]     += _count
-                        elif _state == "Preempting":
-                            pass
-                        else:
-                            # raise BundleException("Unknown State {}: {}".format(_state, l))
-                            print "Unknown State {}: {}".format(_state, l)
-
-                return site_node_slot
-            except Exception as e:
-                print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}\n{}".format(
-                        stdout, stderr, str(e.__class__), str(e))
+        try:
+            exit_status, stdout, stderr = self.run_cmd(
+                    "condor_status -pool osg-flock.grid.iu.edu -state -format '%s' GLIDEIN_Site -format ' %s' Machine -format ' %s\n' State | sort | uniq -c"
+                    )
+            if exit_status != 0:
+                print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}".format(
+                        exit_status, stdout, stderr)
                 return None
+
+            site_node_slot = {
+                    "num_nodes"     : 0,
+                    "busy_jobslots" : 0,
+                    "idle_jobslots" : 0,
+                    "site_info"     : {},
+                    }
+
+            for l in stdout.splitlines():
+                l_token = l.strip().split()
+                if len(l_token) == 4:
+                    _count, _site, _node, _state = l_token
+                    _count = int(_count)
+
+                    if _site not in site_node_slot["site_info"]:
+                        site_node_slot["site_info"][_site] = {
+                                "site_name"  : _site,
+                                "node_list"  : [],
+                                "num_nodes"  : 0, # == len(node_list)
+                                "busy_jobslots" : 0,
+                                "idle_jobslots" : 0,
+                                }
+                    _site_info = site_node_slot["site_info"][_site]
+                    if _node not in _site_info["node_list"]:
+                        _site_info["node_list"].append(_node)
+                        _site_info["num_nodes"]     += 1
+                        site_node_slot["num_nodes"] += 1
+
+                    if _state == "Unclaimed":
+                        site_node_slot["idle_jobslots"] += _count
+                        _site_info["idle_jobslots"]     += _count
+                    elif _state == "Claimed":
+                        site_node_slot["busy_jobslots"] += _count
+                        _site_info["busy_jobslots"]     += _count
+                    elif _state == "Preempting":
+                        pass
+                    else:
+                        # raise BundleException("Unknown State {}: {}".format(_state, l))
+                        print "Unknown State {}: {}".format(_state, l)
+
+            return site_node_slot
+        except Exception as e:
+            print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}\n{}".format(
+                    str(e.__class__), str(e), stdout, stderr)
+            return None
 
     def _query_jobs(self):
         """Query the total number of running/idle/held jobs.
@@ -946,33 +944,32 @@ class CondorAgent(RemoteBundleAgent):
                Success - [TotalMachines, BusyMachines, IdleMachines]
                Failure - None
         """
-        exit_status, stdout, stderr = self.run_cmd(
-                "condor_status -pool osg-flock.grid.iu.edu -state -total"
-                )
-
-        if exit_status != 0:
-            print "CondorAgent _query_total_machines failed:\n{}\n{}\n{}".format(
-                    exit_status, stdout, stderr)
-            return None
-        else:
-            try:
-                BusyClaimed   = 0
-                IdleUnclaimed = 0
-                IdleClaimed   = 0
-                for line in stdout.splitlines():
-                    line = line.strip()
-                    if  line.startswith('Busy'):
-                        BusyClaimed = int(line.split()[4])
-                    elif line.startswith('Idle'):
-                        line_token    = line.split()
-                        IdleUnclaimed = int(line_token[3])
-                        IdleClaimed   = int(line_token[4])
-                return [BusyClaimed+IdleUnclaimed+IdleClaimed,\
-                        BusyClaimed+IdleClaimed, IdleUnclaimed]
-            except Exception as e:
-                print "CondorAgent _query_total_jobs failed:\n{}\n{}".format(
-                        stdout, stderr)
+        try:
+            exit_status, stdout, stderr = self.run_cmd(
+                    "condor_status -pool osg-flock.grid.iu.edu -state -total"
+                    )
+            if exit_status != 0:
+                print "CondorAgent _query_total_machines failed:\n{}\n{}\n{}".format(
+                        exit_status, stdout, stderr)
                 return None
+
+            BusyClaimed   = 0
+            IdleUnclaimed = 0
+            IdleClaimed   = 0
+            for line in stdout.splitlines():
+                line = line.strip()
+                if  line.startswith('Busy'):
+                    BusyClaimed = int(line.split()[4])
+                elif line.startswith('Idle'):
+                    line_token    = line.split()
+                    IdleUnclaimed = int(line_token[3])
+                    IdleClaimed   = int(line_token[4])
+            return [BusyClaimed+IdleUnclaimed+IdleClaimed,\
+                    BusyClaimed+IdleClaimed, IdleUnclaimed]
+        except Exception as e:
+            print "CondorAgent _query_total_jobs failed:\n{}\n{}\n{}\n{}".format(
+                    str(e.__class__), str(e), stdout, stderr)
+            return None
 
 
 supported_types = {
@@ -990,7 +987,7 @@ def type2category(Type):
     else:
         return None
 
-def create(resource_config, db_dir=None, verbosity=0):
+def create(resource_config, dbSession):
     try:
         if resource_config["cluster_type"].lower() == 'moab':
             if resource_config['login_server'].lower().startswith('india'):
@@ -1015,6 +1012,8 @@ def create(resource_config, db_dir=None, verbosity=0):
                     )
             else:
                 logging.error("Unsupported slurm cluster: {}".format(resource_config['login_server']))
+        elif resource_config["cluster_type"].lower() == "condor":
+            return CondorAgent(remote_login=resource_config, dbs=dbSession)
         logging.error("Unknown cluster type: {}".format(resource_config["cluster_type"]))
     except Exception as e:
         logging.exception('bundle agent creation failure!')
