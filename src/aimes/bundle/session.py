@@ -167,7 +167,7 @@ class Session(ru.Daemon):
 
         try:
             self._agent_list[rc['login_server']] = BundleAgent.create(
-                    resource_config=rc, dbSession=self._dbs)
+                    resource_config=rc, dbs=self._dbs)
         except Exception as e:
             print "Failed to creat new BundleAgent for {}:\n{}\n{}".format(
                     rc['login_server'], str(e.__class__), str(e))
