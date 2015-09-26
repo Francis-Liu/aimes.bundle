@@ -95,8 +95,10 @@ class Session(ru.Daemon):
             for rc in self._resource_list:
                 print "adding {}".format(rc)
                 # self._controller.add_cluster(self._resource_list[rc])
-                self.add_agent(self._resource_list[rc])
-                print "{} added".format(rc)
+                if self.add_agent(self._resource_list[rc]):
+                    print "{} added".format(rc)
+                else:
+                    print "{} not added".format(rc)
             print "Step (3 of 4): start bundle agents                  ...",
             print "Success"
 
@@ -164,13 +166,16 @@ class Session(ru.Daemon):
         """
         if  rc['login_server'] in self._agent_list:
             print "BundleAgent for {} already exists, try remove first".format(rc['login_server'])
+            return None
 
         try:
             self._agent_list[rc['login_server']] = BundleAgent.create(
                     resource_config=rc, dbs=self._dbs)
+            return self._agent_list[rc['login_server']]
         except Exception as e:
             print "Failed to creat new BundleAgent for {}:\n{}\n{}".format(
                     rc['login_server'], str(e.__class__), str(e))
+            return None
 
     def remove_agent(self, rc):
         """Stop/Delete BundleAgent instance

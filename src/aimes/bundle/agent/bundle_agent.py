@@ -10,6 +10,7 @@ import os
 import xml.etree.ElementTree as ET
 import re
 import json
+import saga
 
 import paramiko
 
@@ -19,6 +20,7 @@ from aimes.bundle import BundleException
 class RemoteBundleAgent(threading.Thread):
     def __init__(self, resource_config, dbs):
         self._login_server = resource_config["login_server"]
+        self._username     = resource_config["username"]
         self._cluster_type = resource_config["cluster_type"]
         self._category     = type2category(self._cluster_type)
         self._uid          = self._login_server
@@ -26,11 +28,12 @@ class RemoteBundleAgent(threading.Thread):
         self._sampling_interval = 60
         self._config       = None
         self._workload     = None
-        self._queue         = Queue.Queue()
+        self._queue        = Queue.Queue()
 
         threading.Thread.__init__(self, name=self._uid + " bundle agent")
 
         self.setup_ssh_connection(resource_config)
+        self.start_bw_server()
         self.start_timer()
         self.start_cmd_loop()
 
@@ -147,6 +150,36 @@ class RemoteBundleAgent(threading.Thread):
         """Return a dict of resource workload.
         """
         return self._workload
+
+    def start_bw_server(self):
+        """Run an iperf program in server mode.
+        """
+        REMOTE_JOB_ENDPOINT  = "ssh://"  + self._login_server
+        REMOTE_DIR = "sftp://" + self._login_server + "/tmp/aimes.bundle/iperf/"
+
+        ctx = saga.Context("ssh")
+        ctx.user_id = self._username
+
+        session = saga.Session()
+        session.add_context(ctx)
+
+        workdir   = saga.filesystem.Directory(REMOTE_DIR, saga.filesystem.CREATE_PARENTS, session=session)
+        mbwrapper = saga.filesystem.File(
+                'file://localhost/%s/start-iperf-server-daemon.sh' % os.path.dirname(__file__))
+        mbwrapper.copy(workdir.get_url())
+        mbexe     = saga.filesystem.File(
+                'file://localhost/%s/../third_party/iperf-3.0.11-source.tar.gz' % os.path.dirname(__file__))
+        mbexe.copy(workdir.get_url())
+
+        js = saga.job.Service(REMOTE_JOB_ENDPOINT, session=session)
+        jd = saga.job.Description()
+
+        jd.executable        = "./start-iperf-server-daemon.sh"
+        iperf_local_port     = 55201
+        jd.arguments         = [iperf_local_port]
+
+        myjob = js.create_job(jd)
+        myjob.run()
 
 
 class MoabAgent(RemoteBundleAgent, threading.Thread): pass
@@ -313,8 +346,8 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
                 workload[k]['num_running_jobs'] += (v['num_running_jobs'])
 
         except Exception as e:
-            print "PbsAgent get_queue_config failed:\n{}\n{}\n{}\n{}".format(
-                    str(e.__class__), str(e), stdout, stderr)
+            print "PbsAgent get_queue_config failed:\n{}\n{}".format(
+                    str(e.__class__), str(e))
             return
 
         # only overwrite local copy when successful
@@ -744,22 +777,25 @@ class CondorAgent(RemoteBundleAgent):
                Success - [TotalRunningJobs, TotalIdleJobs]
                Failure - None
         """
-        exit_status, stdout, stderr = self.run_cmd(
-                "condor_status -pool osg-flock.grid.iu.edu -schedd -total"
-                )
+        try:
+            exit_status, stdout, stderr = self.run_cmd(
+                    "condor_status -pool osg-flock.grid.iu.edu -schedd -total"
+                    )
 
-        if exit_status != 0:
-            print "CondorAgent _query_total_jobs failed:\n{}\n{}\n{}".format(
-                    exit_status, stdout, stderr)
-            return None
-        else:
-            try:
-                return [int(n) for n in\
-                        stdout.splitlines()[-1].strip().split()[1:3]]
-            except Exception as e:
-                print "CondorAgent _query_total_jobs failed:\n{}\n{}".format(
-                        stdout, stderr)
+            if exit_status != 0:
+                print "CondorAgent _query_total_jobs failed:\n{}\n{}\n{}".format(
+                        exit_status, stdout, stderr)
                 return None
+        except Exception as e:
+            logging.exception("CondorAgent _query_jobs run condor_status failed")
+            return None
+
+        try:
+            return [int(n) for n in\
+                    stdout.splitlines()[-1].strip().split()[1:3]]
+        except Exception as e:
+            logging.exception("CondorAgent _query_jobs failed:\n{}".format(stdout))
+            return None
 
 
 supported_types = {

@@ -145,10 +145,10 @@ setup_args = {
     ],
     'packages'           : find_packages('src'),
     'package_dir'        : {'': 'src'},
+    'package_data'       : {'': ['*.sh', '*.cfg', 'VERSION', 'VERSION.git', 'third_party/iperf-3.0.11-source.tar.gz']},
     'scripts'            : ['bin/aimes-bundle-manager', 
                             'bin/aimes-bundle-query', 
                             'bin/aimes-bundle-version'],
-    'package_data'       : {'': ['*.cfg', 'VERSION', 'VERSION.git']},
     'data_files'         : [
         ('%s/etc/' % sys.prefix, ["%s/configs/aimes_bundle_resources.conf" % mod_root])
         ],
