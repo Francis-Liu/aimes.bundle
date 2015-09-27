@@ -33,7 +33,7 @@ class RemoteBundleAgent(threading.Thread):
         threading.Thread.__init__(self, name=self._uid + " bundle agent")
 
         self.setup_ssh_connection(resource_config)
-        self.start_bw_server()
+        # self.start_bw_server()
         self.start_timer()
         self.start_cmd_loop()
 

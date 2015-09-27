@@ -89,6 +89,8 @@ class Session():
         self._rw   = None
         #    db.session.resource.bandwidth
         self._bw  = None
+        #    db.session.bundle_manager
+        self._bm  = None
 
     @staticmethod
     def new(sid, db_url, db_name="AIMES_bundle"):
@@ -121,7 +123,6 @@ class Session():
         # more metadata are coming
         metadata = {"_id"       : sid,
                     "created"   : creation_time,
-                    "connected" : creation_time,
                     "version"   : _DBVersion}
         self._s.insert(metadata)
 
@@ -132,12 +133,13 @@ class Session():
         self._rc = self._db["{}.resource.config".format(sid)]
         self._rw = self._db["{}.resource.workload".format(sid)]
         self._bw = self._db["{}.resource.bandwidth".format(sid)]
+        self._bm = self._db["{}.bundle_manager".format(sid)]
 
     @staticmethod
     def reconnect(sid, db_url, db_name="AIMES_bundle"):
         """Reconnects to an existing session.
         """
-        dbs = Session(db_url, db_name)
+        dbs = Session(db_url=db_url, db_name=db_name)
         session_metadata = dbs._reconnect(sid)
 
         connection_info = DBConnectionInfo(
@@ -160,8 +162,8 @@ class Session():
         if self._s.find({"_id": sid}).count() != 1:
             raise DBException("DB session {} metadata doesn't exist.".format(sid))
 
-        self._s.update({"_id"  : sid},
-                       {"$set" : {"connected" : datetime.datetime.utcnow()}})
+        # self._s.update({"_id"  : sid},
+        #                {"$set" : {"connected" : datetime.datetime.utcnow()}})
 
         self._session_id = sid
 
@@ -170,6 +172,7 @@ class Session():
         self._rc = self._db["{}.resource.config".format(sid)]
         self._rw = self._db["{}.resource.workload".format(sid)]
         self._bw = self._db["{}.resource.bandwidth".format(sid)]
+        self._bm = self._db["{}.bundle_manager".format(sid)]
 
         # return session metadata
         return self._s.find_one({"_id": sid})
@@ -178,6 +181,9 @@ class Session():
     def session_id(self):
         return self._session_id
 
+    ####################################################################
+    #                    Server-side methods                           #
+    ####################################################################
     def add_resource_list(self, resource_list):
         """Add resource list to db.session.resource.
 
@@ -202,4 +208,18 @@ class Session():
     def update_resource_workload(self, workload):
         self._rw.update(
                 {"resource_id" : workload["resource_id"]}, workload, upsert=True)
+
+    ####################################################################
+    #                    Client-side methods                           #
+    ####################################################################
+    def register_bundle_manager(self, bm_id, ip_addr):
+        self._bm_id = bm_id
+        doc = {"_id" : self._bm_id, "ip_addr" : ip_addr}
+        self._bm.update({"_id" : self._bm_id}, doc, upsert=True)
+
+    def get_resource_list(self):
+        resource_list = []
+        for r in self._r.find():
+            resource_list.append( id2ip(str(r['_id'])) )
+        return resource_list
 

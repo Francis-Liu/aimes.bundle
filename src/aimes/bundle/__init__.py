@@ -7,7 +7,6 @@ __license__   = "MIT"
 
 from exceptions import *
 from session import Session
-from resource_bundle import ResourceBundle, Resource, Queue
 from bundle_manager import BundleManager
 
 # ------------------------------------------------------------------------------

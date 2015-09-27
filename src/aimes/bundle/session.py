@@ -103,6 +103,9 @@ class Session(ru.Daemon):
             print "Success"
 
             print "Step (4 of 4): enter service mode                   ...",
+            print self._database_url
+            print self._database_name
+            print self._uid
             print "Success"
 
         else:
@@ -116,7 +119,7 @@ class Session(ru.Daemon):
         return
 
     @property
-    def service_name(self):
+    def service_address(self):
         return "{}/{}.{}".format(self._database_url, self._databasename,
                                  self._uid)
 
