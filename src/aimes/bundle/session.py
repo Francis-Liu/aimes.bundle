@@ -18,9 +18,10 @@ class Session(ru.Daemon):
     """Session class
     """
     def __init__(self, database_url=None, database_name="AIMES_bundle",
-                 uid=None):
+                 config_file=None, uid=None):
         self._database_url          = database_url
         self._database_name         = database_name
+        self._config_file           = config_file
         self._uid                   = uid
         self._resource_list         = {}
         self._dbs                   = None
@@ -54,11 +55,13 @@ class Session(ru.Daemon):
 
             print "Step (2 of 4): process resource configuration files ...",
             # load resource config file, parse it into dict
-            config_file = os.getenv("AIMES_BUNDLE_CONFIG", None)
-            if not config_file:
+            if  not self._config_file:
+                self._config_file = os.getenv("AIMES_BUNDLE_CONFIG", None)
+
+            if  not self._config_file:
                 print "Failed"
-                # TODO drop db.session
                 raise BundleException("no resource config file (set AIMES_BUNDLE_CONFIG)")
+
             # if not config_file:
             #     module_path  = os.path.dirname(os.path.abspath(__file__))
             #     default_cfgs = "{}/configs/*.conf".format(module_path)
@@ -76,7 +79,7 @@ class Session(ru.Daemon):
             #     for rc in rcs:
             #         self._resource_list[rc] = rcs[rc]
             try:
-                rcs = self.load_resource_config_file(config_file=config_file)
+                rcs = self.load_resource_config_file(config_file=self._config_file)
                 for rc in rcs:
                     self._resource_list[rc] = rcs[rc]
             except Exception as e:
@@ -109,7 +112,7 @@ class Session(ru.Daemon):
             print "Success"
 
         else:
-            # reconnect to existing session
+            # TODO reconnect to existing session
             return
 
     def __del__ (self) :
