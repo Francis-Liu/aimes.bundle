@@ -223,3 +223,8 @@ class Session():
             resource_list.append( id2ip(str(r['_id'])) )
         return resource_list
 
+    def get_resource_config(self, resource_name):
+        return self._rc.find_one({"_id": ip2id(resource_name)})
+
+    def get_resource_workload(self, resource_name):
+        return self._rw.find_one({"resource_id": resource_name})

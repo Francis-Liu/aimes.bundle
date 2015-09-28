@@ -25,6 +25,9 @@ class BundleManager(object):
         self._dbs_metadata  = None
         self._dbs_connection_info = None
         self._ip_addr       = socket.gethostbyname(socket.getfqdn())
+        self._resource_list = None
+        # { rb_id : rb_obj }
+        self._resource_bundles = None
 
         # Step1: connect to db
         try:
@@ -40,10 +43,7 @@ class BundleManager(object):
             logging.exception("{}:{}".format(str(e.__class__), str(e)))
             raise BundleException("BundleManager.__init__: db connection Failed!")
 
-        # Step 2: get resource list
-        self._resource_list = self._dbs.get_resource_list()
-
-        # Step 3: create resource bundles
+        self._resource_bundles = [ResourceBundle.ResourceBundle.create(self._dbs)]
 
     @property
     def uid(self):
@@ -53,3 +53,6 @@ class BundleManager(object):
     def resource_list(self):
         return self._resource_list
 
+    @property
+    def resource_bundles(self):
+        return self._resource_bundles

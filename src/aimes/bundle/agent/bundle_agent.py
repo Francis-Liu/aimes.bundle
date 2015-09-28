@@ -361,7 +361,11 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
                 print "'qstat -Q -f' return ({}): stdout({}), stderr({})".format(
                     exit_status, stdout, stderr)
                 return None
+        except Exception as e:
+            logging.exception('PbsAgent get_queue_config run qstat failed')
+            return None
 
+        try:
             _queue_info = {}
 
             for line_str in stdout.splitlines():
@@ -618,7 +622,11 @@ class SlurmAgent(RemoteBundleAgent):
                 print "'sinfo' return ({}): stdout({}), stderr({})".format(
                     exit_status, stdout, stderr)
                 return None
+        except:
+            logging.exception("SlurmAgent get_queue_config query sinfo failed")
+            return None
 
+        try:
             _queue_info = {}
 
             for line_str in stdout.splitlines()[1:]:
