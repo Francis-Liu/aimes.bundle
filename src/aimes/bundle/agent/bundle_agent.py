@@ -33,7 +33,7 @@ class RemoteBundleAgent(threading.Thread):
         threading.Thread.__init__(self, name=self._uid + " bundle agent")
 
         self.setup_ssh_connection(resource_config)
-        # self.start_bw_server()
+        self.start_bw_server()
         self.start_timer()
         self.start_cmd_loop()
 
@@ -116,6 +116,7 @@ class RemoteBundleAgent(threading.Thread):
 
     def run(self):
         while True:
+            # TODO maybe wrap around all function calls with try:except:
             cmd = self._queue.get()
             if cmd is "update_config":
                 self._update_config()
@@ -124,6 +125,7 @@ class RemoteBundleAgent(threading.Thread):
                 self._update_workload()
                 self._queue.task_done()
             elif cmd is "close":
+                print "debug: run() closing"
                 if self._timer:
                     self._timer.cancel()
                 self._queue.task_done()
@@ -133,6 +135,7 @@ class RemoteBundleAgent(threading.Thread):
                 self._queue.task_done()
 
     def close(self):
+        logging.exception("debug: close() called")
         if self._queue:
             self._queue.put("close")
             self._queue.join()
@@ -158,7 +161,9 @@ class RemoteBundleAgent(threading.Thread):
         REMOTE_DIR = "sftp://" + self._login_server + "/tmp/aimes.bundle/iperf/"
 
         ctx = saga.Context("ssh")
-        ctx.user_id = self._username
+        ctx.user_id  = self._username
+        # ctx.user_key = "$HOME/.ssh/id_rsa.pub"
+        ctx.user_key = "/home/grad03/fengl/.ssh/id_rsa.pub"
 
         session = saga.Session()
         session.add_context(ctx)
@@ -727,7 +732,11 @@ class CondorAgent(RemoteBundleAgent):
                 print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}".format(
                         exit_status, stdout, stderr)
                 return None
+        except Exception as e:
+            logging.exception("CondorAgent _query_site_node_slot run condor_status failed")
+            return None
 
+        try:
             site_node_slot = {
                     "num_nodes"     : 0,
                     "busy_jobslots" : 0,
