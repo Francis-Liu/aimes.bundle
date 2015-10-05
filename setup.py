@@ -156,7 +156,10 @@ setup_args = {
     'cmdclass'             : {
         'test'             : our_test,
     },
-    'install_requires'   : ['paramiko', 'radical.utils'],
+    'install_requires'   : ['saga-python',
+                            'radical.utils',
+                            'pymongo==2.8',
+                            'paramiko'],
     'tests_require'      : ['pytest'],
     'extras_require'     : {},
     'zip_safe'           : False,

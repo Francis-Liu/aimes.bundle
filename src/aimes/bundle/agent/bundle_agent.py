@@ -21,6 +21,9 @@ class RemoteBundleAgent(threading.Thread):
     def __init__(self, resource_config, dbs):
         self._login_server = resource_config["login_server"]
         self._username     = resource_config["username"]
+        self._password     = resource_config.get('password')
+        self._port         = resource_config.get('port', 22)
+        self._key_filename = resource_config.get('key_filename')
         self._cluster_type = resource_config["cluster_type"]
         self._category     = type2category(self._cluster_type)
         self._uid          = self._login_server
@@ -32,8 +35,8 @@ class RemoteBundleAgent(threading.Thread):
 
         threading.Thread.__init__(self, name=self._uid + " bundle agent")
 
-        self.setup_ssh_connection(resource_config)
-        self.start_bw_server()
+        self.setup_ssh_connection()
+        # self.start_bw_server()
         self.start_timer()
         self.start_cmd_loop()
 
@@ -62,15 +65,19 @@ class RemoteBundleAgent(threading.Thread):
         self.critical = self.logger.critical
         self.exception = self.logger.exception
 
-    def setup_ssh_connection(self, credential):
+    def setup_ssh_connection(self):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect( hostname=self._login_server,
-                          port=credential.get('port', 22),
-                          username=credential.get('username'),
-                          password=credential.get('password'),
-                          key_filename=credential.get('key_filename') )
+                          port=self._port,
+                          username=self._username,
+                          password=self._password,
+                          key_filename=self._key_filename )
         self.cmd_prefix = ''
+
+    def ssh_reconnect(self):
+        self.ssh.close()
+        self.setup_ssh_connection()
 
     def run_cmd(self, cmd, timeout=30):
         try:
@@ -103,6 +110,35 @@ class RemoteBundleAgent(threading.Thread):
         else:
             return exit_status, stdout, stderr
 
+    def Run_Cmd(self, cmd):
+        try:
+            # 1st attempt
+            exit_status, stdout, stderr = self.run_cmd(cmd)
+            if exit_status != 0:
+                print "{}({}) remote run '{}' failed:\nexit_status={}:\nstdout={}\nstderr{}".format(
+                        self._uid, self.__class__.__name__, cmd,
+                        exit_status, stdout, stderr)
+                return None, '', ''
+        except Exception as e:
+            logging.exception("{}({}) remote run '{}' failed".format(
+                    self._uid, self.__class__.__name__, cmd))
+            self.ssh_reconnect()
+            try:
+                # 2nd attempt
+                exit_status, stdout, stderr = self.run_cmd(cmd)
+                if exit_status != 0:
+                    print "{}({}) remote run '{}' failed:\nexit_status={}:\nstdout={}\nstderr{}".format(
+                            self._uid, self.__class__.__name__, cmd,
+                            exit_status, stdout, stderr)
+                    return None, '', ''
+            except Exception as e:
+                logging.exception("{}({}) remote run '{}' failed in 2nd try".format(
+                        self._uid, self.__class__.__name__, cmd))
+                # reconnect again before we leave
+                self.ssh_reconnect()
+                return None, '', ''
+        return exit_status, stdout, stderr
+
     def start_cmd_loop(self):
         self.setDaemon(True)
         self.start()
@@ -125,7 +161,7 @@ class RemoteBundleAgent(threading.Thread):
                 self._update_workload()
                 self._queue.task_done()
             elif cmd is "close":
-                print "debug: run() closing"
+                print "debug ({}): run() closing".format(self._uid)
                 if self._timer:
                     self._timer.cancel()
                 self._queue.task_done()
@@ -135,7 +171,7 @@ class RemoteBundleAgent(threading.Thread):
                 self._queue.task_done()
 
     def close(self):
-        logging.exception("debug: close() called")
+        logging.exception("debug ({}): close() called".format(self._uid))
         if self._queue:
             self._queue.put("close")
             self._queue.join()
@@ -168,6 +204,7 @@ class RemoteBundleAgent(threading.Thread):
         session = saga.Session()
         session.add_context(ctx)
 
+        print "debug: {} {}".format(self._uid, self._username)
         workdir   = saga.filesystem.Directory(REMOTE_DIR, saga.filesystem.CREATE_PARENTS, session=session)
         mbwrapper = saga.filesystem.File(
                 'file://localhost/%s/start-iperf-server-daemon.sh' % os.path.dirname(__file__))
@@ -241,6 +278,7 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
         super(PbsAgent, self).__init__(resource_config, dbs)
 
     def __del__(self):
+        print "debug ({}): __del__() called".format(self._uid)
         self.close()
 
     @property
@@ -360,14 +398,9 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
         self._dbs.update_resource_workload(self._workload)
 
     def get_queue_config(self, flag=0):
-        try:
-            exit_status, stdout, stderr = self.run_cmd("qstat -Q -f")
-            if exit_status != 0:
-                print "'qstat -Q -f' return ({}): stdout({}), stderr({})".format(
-                    exit_status, stdout, stderr)
-                return None
-        except Exception as e:
-            logging.exception('PbsAgent get_queue_config run qstat failed')
+        cmd = "qstat -Q -f"
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
             return None
 
         try:
@@ -447,13 +480,12 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
 
     # TODO add more error handling, what if the queue is empty?
     def qstat_x(self):
-        try:
-            exit_status, stdout, stderr = self.run_cmd("qstat -x")
-            if exit_status != 0:
-                print "'qstat -a -x' return ({}): stdout({}), stderr({})".format(
-                    exit_status, stdout, stderr)
-                return None
+        cmd = "qstat -x"
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
+            return None
 
+        try:
             queue_nodes = {}
             root = ET.fromstring(stdout)
             for job in root.findall('Job'):
@@ -488,13 +520,12 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
     def pbsnodes(self):
         """Run pbsnodes -a to collect info of node status
         """
-        try:
-            exit_status, stdout, stderr = self.run_cmd("pbsnodes -a -x")
-            if exit_status != 0:
-                print "remote run pbanodes failed:\n{}\n{}\n{}".format(
-                        exit_status, stdout, stderr)
-                return None
+        cmd = "pbsnodes -a -x"
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
+            return None
 
+        try:
             root = ET.fromstring(stdout)
             node_list = {}
             for node in root.findall('Node'):
@@ -551,6 +582,7 @@ class SlurmAgent(RemoteBundleAgent):
         super(SlurmAgent, self).__init__(resource_config, dbs)
 
     def __del__(self):
+        print "debug ({}): __del__() called".format(self._uid)
         self.close()
 
     @property
@@ -575,16 +607,16 @@ class SlurmAgent(RemoteBundleAgent):
 
     def _update_workload(self):
         queue_config = self.get_queue_config(1)
-        if not queue_config:
+        if queue_config == None:
             print "SlurmAgent _update_workload failed!"
             return
 
+        cmd = 'squeue -r -o "%.18i %.13P %.13T %.6D"'
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
+            return None
+
         try:
-            exit_status, stdout, stderr = self.run_cmd('squeue -r -o "%.18i %.13P %.13T %.6D"')
-            if exit_status != 0:
-                print "SlurmAgent _update_workload call 'squeue' failed:\n{}\n{}\n{}".format(
-                    exit_status, stdout, stderr)
-                return
 
             workload = {
                     "resource_id"       : self._uid,
@@ -621,14 +653,9 @@ class SlurmAgent(RemoteBundleAgent):
         self._dbs.update_resource_workload(self._workload)
 
     def get_queue_config(self, flag=0):
-        try:
-            exit_status, stdout, stderr = self.run_cmd('sinfo -o "%20P %5a %.10l %20F"')
-            if exit_status != 0:
-                print "'sinfo' return ({}): stdout({}), stderr({})".format(
-                    exit_status, stdout, stderr)
-                return None
-        except:
-            logging.exception("SlurmAgent get_queue_config query sinfo failed")
+        cmd = 'sinfo -o "%20P %5a %.10l %20F"'
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
             return None
 
         try:
@@ -665,6 +692,7 @@ class CondorAgent(RemoteBundleAgent):
         super(CondorAgent, self).__init__(resource_config, dbs)
 
     def __del__(self):
+        print "debug ({}): __del__() called".format(self._uid)
         self.close()
 
     def _update_config(self):
@@ -724,16 +752,9 @@ class CondorAgent(RemoteBundleAgent):
     def _query_site_node_slot(self):
         """Return useful information of site, node, job slot.
         """
-        try:
-            exit_status, stdout, stderr = self.run_cmd(
-                    "condor_status -pool osg-flock.grid.iu.edu -state -format '%s' GLIDEIN_Site -format ' %s' Machine -format ' %s\n' State | sort | uniq -c"
-                    )
-            if exit_status != 0:
-                print "CondorAgent _query_site_node_slot failed:\n{}\n{}\n{}".format(
-                        exit_status, stdout, stderr)
-                return None
-        except Exception as e:
-            logging.exception("CondorAgent _query_site_node_slot run condor_status failed")
+        cmd = "condor_status -pool osg-flock.grid.iu.edu -state -format '%s' GLIDEIN_Site -format ' %s' Machine -format ' %s\n' State | sort | uniq -c"
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
             return None
 
         try:
@@ -794,17 +815,9 @@ class CondorAgent(RemoteBundleAgent):
                Success - [TotalRunningJobs, TotalIdleJobs]
                Failure - None
         """
-        try:
-            exit_status, stdout, stderr = self.run_cmd(
-                    "condor_status -pool osg-flock.grid.iu.edu -schedd -total"
-                    )
-
-            if exit_status != 0:
-                print "CondorAgent _query_total_jobs failed:\n{}\n{}\n{}".format(
-                        exit_status, stdout, stderr)
-                return None
-        except Exception as e:
-            logging.exception("CondorAgent _query_jobs run condor_status failed")
+        cmd = "condor_status -pool osg-flock.grid.iu.edu -schedd -total"
+        exit_status, stdout, stderr = self.Run_Cmd(cmd=cmd)
+        if exit_status == None:
             return None
 
         try:
