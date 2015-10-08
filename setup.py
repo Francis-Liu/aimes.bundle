@@ -158,6 +158,7 @@ setup_args = {
     },
     'install_requires'   : ['saga-python',
                             'radical.utils',
+                            'radical.pilot',
                             'pymongo==2.8',
                             'paramiko'],
     'tests_require'      : ['pytest'],

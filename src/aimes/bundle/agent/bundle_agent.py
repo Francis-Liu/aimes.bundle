@@ -161,7 +161,7 @@ class RemoteBundleAgent(threading.Thread):
                 self._update_workload()
                 self._queue.task_done()
             elif cmd is "close":
-                print "debug ({}): run() closing".format(self._uid)
+                logging.debug("closing monitoring thread for {}".format(self._uid))
                 if self._timer:
                     self._timer.cancel()
                 self._queue.task_done()
@@ -171,7 +171,6 @@ class RemoteBundleAgent(threading.Thread):
                 self._queue.task_done()
 
     def close(self):
-        logging.exception("debug ({}): close() called".format(self._uid))
         if self._queue:
             self._queue.put("close")
             self._queue.join()
@@ -277,9 +276,9 @@ class PbsAgent(RemoteBundleAgent, threading.Thread):
     def __init__(self, resource_config, dbs):
         super(PbsAgent, self).__init__(resource_config, dbs)
 
-    def __del__(self):
-        print "debug ({}): __del__() called".format(self._uid)
-        self.close()
+    # def __del__(self):
+    #     print "debug ({}): __del__() called".format(self._uid)
+    #     self.close()
 
     @property
     def num_nodes(self):
@@ -581,9 +580,9 @@ class SlurmAgent(RemoteBundleAgent):
     def __init__(self, resource_config, dbs):
         super(SlurmAgent, self).__init__(resource_config, dbs)
 
-    def __del__(self):
-        print "debug ({}): __del__() called".format(self._uid)
-        self.close()
+    # def __del__(self):
+    #     print "debug ({}): __del__() called".format(self._uid)
+    #     self.close()
 
     @property
     def num_nodes(self):
@@ -691,9 +690,9 @@ class CondorAgent(RemoteBundleAgent):
     def __init__(self, resource_config, dbs):
         super(CondorAgent, self).__init__(resource_config, dbs)
 
-    def __del__(self):
-        print "debug ({}): __del__() called".format(self._uid)
-        self.close()
+    # def __del__(self):
+    #     print "debug ({}): __del__() called".format(self._uid)
+    #     self.close()
 
     def _update_config(self):
         """Push resource config info to db.

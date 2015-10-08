@@ -2,14 +2,15 @@
 
 import os
 import sys
+import time
 import pprint
+import signal
 import logging
 import optparse
 
 import aimes.bundle
 
-AIMES_BUNDLE_DBURL  = "mongodb://54.221.194.147:24242/"
-AIMES_BUNDLE_CONFIG = "/home/grad03/fengl/mypyenv2.sc2014.demo/etc/aimes_bundle_resources.conf"
+DEFAULT_BUNDLE_DBURL  = "mongodb://54.221.194.147:24242/"
 
         
 # ------------------------------------------------------------------------------
@@ -19,9 +20,9 @@ def parse_options():
     parser = optparse.OptionParser (add_help_option=False)
 
     parser.add_option ('-c', '--config-file', dest='config_file', default=None)
-    parser.add_option ('-m', '--mode',        dest='mode',        default='once') 
+    parser.add_option ('-m', '--mode',        dest='mode',        default='daemon') 
     parser.add_option ('-s', '--session-id',  dest='session_id',  default=None)
-    parser.add_option ('-u', '--url',         dest='url',         default=DEFAULT_MONGODB_URL) 
+    parser.add_option ('-u', '--url',         dest='url',         default=DEFAULT_BUNDLE_DBURL) 
     parser.add_option ('-v', '--verbose',     dest='verbose',     action ='store_true') 
     parser.add_option ('-h', '--help',        dest='help',        action ='store_true') 
 
@@ -75,7 +76,7 @@ def usage(msg=None):
             seconds, ie. it will become a dameon.
 
 
-""" % (sys.argv[0], sys.argv[0], DEFAULT_MONGODB_URL)
+""" % (sys.argv[0], sys.argv[0], DEFAULT_BUNDLE_DBURL)
 
     if msg :
         sys.exit (-1)
@@ -126,7 +127,14 @@ def main(argv=None):
 
     if mode == 'daemon' :
 
-        bs = aimes.bundle.Session(database_url=AIMES_BUNDLE_DBURL, uid=session_id)
+        bs = aimes.bundle.Session(database_url=url, uid=session_id, config_file=config_file)
+        def sigint_handler(signum, frame):
+            bs.close()
+            sys.exit(0)
+        signal.signal(signal.SIGINT, sigint_handler)
+        while True:
+            time.sleep(1)
+                     
 
 
     elif mode == 'once' :

@@ -3,6 +3,7 @@
 import os 
 import glob
 import logging
+import time
 
 from aimes.bundle                 import BundleException
 from aimes.bundle.db              import DBException
@@ -14,11 +15,13 @@ from aimes.bundle.agent           import BundleAgent
 import radical.utils      as ru
 
 
-class Session(ru.Daemon):
+class Session(object):
     """Session class
     """
     def __init__(self, database_url=None, database_name="AIMES_bundle",
                  config_file=None, uid=None):
+        """
+        """
         self._database_url          = database_url
         self._database_name         = database_name
         self._config_file           = config_file
@@ -115,11 +118,10 @@ class Session(ru.Daemon):
             # TODO reconnect to existing session
             return
 
-    def __del__ (self) :
-        self.close ()
-
     def close(self, cleanup=True, terminate=True, delete=None):
-        return
+        print "Closing session ..."
+        for rid in self._agent_list.keys():
+            self.remove_agent(resource_id=rid)
 
     @property
     def service_address(self):
@@ -183,62 +185,12 @@ class Session(ru.Daemon):
                     rc['login_server'], str(e.__class__), str(e))
             return None
 
-    def remove_agent(self, rc):
+    def remove_agent(self, resource_id):
         """Stop/Delete BundleAgent instance
         """
-        if  rc['login_server'] not in self._agent_name_list:
-            print "BundleAgent {} doesn't exists".format(rc['login_server'])
-
-    def start_daemon(self) :
-        """start daemon process which will execute self.run()
-        """
-        self.config_file  = config_file
-        self.idle_timeout = 60 # FIXME: make configurable
-        self.mongodb_url  = mongodb_url
-
-        retval = self.start (debug=False)
-
-        print 'daemonized'
-        return retval
-
-    def run(self):
-        """
-        """
-
-        try :
-            while True :
-
-                coll_config    = db['config'   ]
-                coll_workload  = db['workload' ]
-                coll_bandwidth = db['bandwidth']
-
-                ret = self.get_data ()
-
-                for cluster_ip in ret['cluster_list'] :
-
-                    cluster_id = ip2id (cluster_ip)
-                
-                    config     = ret['cluster_config'   ][cluster_id]
-                    workload   = ret['cluster_workload' ][cluster_id]
-                    bandwidth  = ret['cluster_bandwidth'][cluster_id]
-
-                    timestamp  = time.time ()
-
-                    if config    : config    ['timestamp'] = timestamp
-                    if workload  : workload  ['timestamp'] = timestamp
-                    if bandwidth : bandwidth ['timestamp'] = timestamp
-
-                    if config    : config    ['_id'] = cluster_id
-                    if workload  : workload  ['_id'] = cluster_id
-                    if bandwidth : bandwidth ['_id'] = cluster_id
-
-                    if config    : coll_config   .update ({'_id': cluster_id}, config   , upsert=True)
-                    if workload  : coll_workload .update ({'_id': cluster_id}, workload , upsert=True)
-                    if bandwidth : coll_bandwidth.update ({'_id': cluster_id}, bandwidth, upsert=True)
-
-                time.sleep (self.idle_timeout)
-
-        except Exception as e :
-            # FIXME: need a logfile from daemon base class
-            raise
+        if  resource_id not in self._agent_list:
+            print "BundleAgent {} doesn't exists".format(resource_id)
+            return
+        self._agent_list[resource_id].close()
+        del self._agent_list[resource_id]
 
