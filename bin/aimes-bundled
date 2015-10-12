@@ -5,6 +5,7 @@ import sys
 import time
 import pprint
 import signal
+import socket
 import logging
 import optparse
 
@@ -45,7 +46,7 @@ def usage(msg=None):
                 location of the bundle configuration file (mandatory)
            
             -m --mode
-                specify connectivity mode: daemon or once (default: daemon)
+                specify connectivity mode: daemon or debug (default: daemon)
            
             -u --url
                 specify communication endpoint for mongodb 
@@ -67,7 +68,7 @@ def usage(msg=None):
                     config file, collect the information gathered by the
                     agents, and store it in a mongodb for later query by
                     clients.
-            once  : the bundle server will start agents according to the
+            debug : the bundle server will start agents according to the
                     config file, collect the information gathered by the
                     agents, and print them on stdout.
 
@@ -110,7 +111,7 @@ def main(argv=None):
     # we need to make path to bundle config absolute (for daemon)
     config_file = os.path.abspath (config_file) 
 
-    if mode not in ['daemon', 'once'] :
+    if mode not in ['daemon', 'debug'] :
         usage("mode '%s' not supported" % mode)
 
     if not os.path.isfile(config_file):
@@ -123,22 +124,30 @@ def main(argv=None):
         logging.basicConfig(format='%(asctime)s %(levelname)s:%(name)s:%(filename)s:%(lineno)s:%(message)s',
             level=logging.ERROR)
 
-
-
     if mode == 'daemon' :
+        try:
+            import Pyro4
+        except ImportError:
+            logging.critical("Bundle Daemon depends on Pyro4: install Pyro4.")
+            sys.exit(1)
+
+        def sigint_handler(signum, frame):
+            daemon.shutdown()
+            bs.close()
+            print "bundled: interrupt - AIMES.Bundle server session has terminated"
+            sys.exit(0)
 
         bs = aimes.bundle.Session(database_url=url, uid=session_id, config_file=config_file)
-        def sigint_handler(signum, frame):
-            bs.close()
-            sys.exit(0)
+
+        hostname = socket.getfqdn()
+        daemon   = Pyro4.Daemon(host=hostname)
+        uri      = str(daemon.register(bs))
+        print "uri=", uri
+        bs.publish_pyro_uri(uri)
         signal.signal(signal.SIGINT, sigint_handler)
-        while True:
-            time.sleep(1)
-                     
+        daemon.requestLoop()
 
-
-    elif mode == 'once' :
-
+    elif mode == 'debug' :
         print "Not supported yet"
         return
         # Note that this mode does not use the bundle api, but the
@@ -161,12 +170,6 @@ def main(argv=None):
         #     print
         #     print
 
-# ------------------------------------------------------------------------------
-#
 if __name__ == "__main__":
     
     sys.exit(main())
-
-
-# ------------------------------------------------------------------------------
-

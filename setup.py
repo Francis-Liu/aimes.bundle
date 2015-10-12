@@ -145,13 +145,13 @@ setup_args = {
     ],
     'packages'           : find_packages('src'),
     'package_dir'        : {'': 'src'},
-    'package_data'       : {'': ['*.sh', '*.cfg', 'VERSION', 'VERSION.git', 'third_party/iperf-3.0.11-source.tar.gz']},
+    'package_data'       : {'': ['*.sh', '*.json', 'VERSION', 'VERSION.git', 'third_party/iperf-3.0.11-source.tar.gz']},
     'scripts'            : ['bin/aimes-bundled', 
                             'bin/aimes-bundle-manager', 
                             'bin/aimes-bundle-query', 
                             'bin/aimes-bundle-version'],
     'data_files'         : [
-        ('%s/etc/' % sys.prefix, ["%s/configs/aimes_bundle_resources.conf" % mod_root])
+        ('%s/etc/' % sys.prefix, ["%s/configs/aimes_bundle_resource.json" % mod_root])
         ],
     'cmdclass'             : {
         'test'             : our_test,
@@ -160,7 +160,8 @@ setup_args = {
                             'radical.utils',
                             'radical.pilot',
                             'pymongo==2.8',
-                            'paramiko'],
+                            'paramiko',
+                            'Pyro4'],
     'tests_require'      : ['pytest'],
     'extras_require'     : {},
     'zip_safe'           : False,

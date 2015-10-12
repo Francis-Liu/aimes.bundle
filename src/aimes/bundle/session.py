@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-
 import os 
 import glob
-import logging
 import time
+import logging
+import threading
+
+import radical.utils as ru
 
 from aimes.bundle                 import BundleException
 from aimes.bundle.db              import DBException
 from aimes.bundle.db              import Session as dbSession
 from aimes.bundle.bundle_manager  import BundleManager
-# from aimes.bundle                 import resource_bundle
 from aimes.bundle.agent           import BundleAgent
-
-import radical.utils      as ru
 
 
 class Session(object):
@@ -26,10 +25,11 @@ class Session(object):
         self._database_name         = database_name
         self._config_file           = config_file
         self._uid                   = uid
-        self._resource_list         = {}
+        self._resource_cfgs         = {} # resource_cfgs has a super-set of bundle agents
+        self._endpoints             = {} # a dict of res_name:cfg, for bw monitors
         self._dbs                   = None
         self._dbs_metadata          = None
-        self._dbs_connection_info   = None
+        # self._dbs_connection_info   = None
         self._agent_list            = {}
 
         if  not self._database_url:
@@ -40,13 +40,14 @@ class Session(object):
 
         if  uid is None:
             # create new session
-            print "Initializing AIMES.Bundle session:"
-            print "Step (1 of 4): setup database session               ...",
+            print "Starting a new AIMES.Bundle server session:"
+            print "Step (1 of 3): setup database session               ...",
             try:
                 self._uid = ru.generate_id('aimes_bundle.session',
                                   mode=ru.ID_PRIVATE)
 
-                self._dbs, self._dbs_metadata, self._dbs_connection_info = \
+                # self._dbs, self._dbs_metadata, self._dbs_connection_info = \
+                self._dbs, self._dbs_metadata = \
                         dbSession.new(sid     = self._uid,
                                       db_url  = self._database_url,
                                       db_name = database_name)
@@ -54,10 +55,10 @@ class Session(object):
                 print "Failed"
                 logging.exception("{}:{}".format(str(e.__class__), str(e)))
                 raise BundleException("Session.__init__: db setup Failed!")
-            print "Success"
+            print "Done"
 
-            print "Step (2 of 4): process resource configuration files ...",
-            # load resource config file, parse it into dict
+            print "Step (2 of 3): process resource configuration files ...",
+            # load resource config json file, parse it into dict
             if  not self._config_file:
                 self._config_file = os.getenv("AIMES_BUNDLE_CONFIG", None)
 
@@ -65,6 +66,7 @@ class Session(object):
                 print "Failed"
                 raise BundleException("no resource config file (set AIMES_BUNDLE_CONFIG)")
 
+            # TODO parsing all directory
             # if not config_file:
             #     module_path  = os.path.dirname(os.path.abspath(__file__))
             #     default_cfgs = "{}/configs/*.conf".format(module_path)
@@ -81,38 +83,40 @@ class Session(object):
             #         continue
             #     for rc in rcs:
             #         self._resource_list[rc] = rcs[rc]
+
             try:
-                rcs = self.load_resource_config_file(config_file=self._config_file)
-                for rc in rcs:
-                    self._resource_list[rc] = rcs[rc]
+                self._resource_cfgs = self.load_resource_config_file_json(config_file=self._config_file)
             except Exception as e:
                 print "Failed"
                 logging.exception("{}:{}".format(str(e.__class__), str(e)))
                 raise BundleException("Session.__init__: parsing resource config file Failed!")
 
-            # push resource list to db
-            self._dbs.add_resource_list(resource_list=self._resource_list)
-            print "Success"
+            # push resource_cfgs to db
+            self._dbs.add_resource_cfgs(resource_cfgs=self._resource_cfgs)
+            print "Done"
 
-            print "Step (3 of 4): start bundle agents                  ..."
-            # self._controller = BundleAgentController(session=self,
-            #         db_connection=self._dbs)
-            # add each resource to bundle_agent_controller
-            for rc in self._resource_list:
-                print "adding {}".format(rc)
-                # self._controller.add_cluster(self._resource_list[rc])
-                if self.add_agent(self._resource_list[rc]):
-                    print "{} added".format(rc)
+            print "Step (3 of 3): start bundle agents                  ..."
+            for res_name, cfg in self._resource_cfgs.iteritems():
+                if not cfg["bundle_agent"]:
+                    # This is an endpoint
+                    self._endpoints[res_name] = cfg
+                    self._endpoints[res_name]["lock"] = threading.Lock()
+                    continue
+
+                print "adding {}".format(res_name)
+
+                if self.add_agent(res_name, cfg) != None:
+                    print "{} added".format(res_name)
                 else:
-                    print "{} not added".format(rc)
-            print "Step (3 of 4): start bundle agents                  ...",
-            print "Success"
+                    print "{} not added".format(res_name)
 
-            print "Step (4 of 4): enter service mode                   ...",
-            print self._database_url
-            print self._database_name
-            print self._uid
-            print "Success"
+            print "Step (3 of 3): start bundle agents                  ...",
+            print "Done"
+
+            print "Connect to this Session using:"
+            print "  db_url        = ", self._database_url
+            print "  database_name = ", self._database_name
+            print "  session_id    = ", self._uid
 
         else:
             # TODO reconnect to existing session
@@ -120,77 +124,90 @@ class Session(object):
 
     def close(self, cleanup=True, terminate=True, delete=None):
         print "Closing session ..."
-        for rid in self._agent_list.keys():
-            self.remove_agent(resource_id=rid)
+        for uid in self._agent_list.keys():
+            self.remove_agent(uid=uid)
+
+    @property
+    def version(self):
+        return "0.1.0"
 
     @property
     def service_address(self):
         return "{}/{}.{}".format(self._database_url, self._databasename,
                                  self._uid)
 
-    def load_resource_config_file(self, config_file):
+    def load_resource_config_file_json(self, config_file):
         """Load all resource logins from one config file to a dict.
         """
-        # TODO json, one org per file
-        _cred = {}
         _valid_p     = ['cluster_type', 'login_server', 'username',
                         'password', 'key_file']
-        _mandatory_p = ['cluster_type', 'login_server', 'username']
-        _file = open(config_file, 'r')
-        for _l in _file:
-            _l = _l.strip()
-            if _l and not _l.startswith('#'):
-                _c = {}
-                for _p in _l.split():
-                    _k, _v = _p.split('=')
-                    _k = _k.strip()
-                    if _k not in _valid_p:
-                        logging.error("Invalid key '{}': skip '{}'".format(_k, _l))
+        rcfgs = {}
+
+        try:
+            rcf_dict = ru.read_json_str(config_file)
+
+            for res_name, cfg in rcf_dict.iteritems():
+
+                invalid_cfg = False
+                for k in ["bundle_agent", "ssh"]:
+                    if k not in cfg:
+                        invalid_cfg = True
+                if invalid_cfg is True:
+                    continue
+
+                if cfg["bundle_agent"] is True:
+                    if "cluster_type" not in cfg:
                         continue
-                    _c[_k.strip()] = _v.strip()
-                _missing_key = False
-                for _k in _mandatory_p:
-                    if _k not in _c:
-                        logging.error("Missing mandatory key '{}': {}".format(_k, _l))
-                        _missing_key = True
-                        break
-                if not _missing_key:
-                    if _c['cluster_type'] not in BundleAgent.supported_types:
-                        logging.error("Unsupported resource type '{}': {}".format(
-                                _c['cluster_type'], _l))
+                    elif cfg["cluster_type"] not in BundleAgent.supported_types:
                         continue
-                    _cred[_c['login_server']] = _c
-                else:
-                    logging.error("Skip '{}'".format(_l))
-        return _cred
+                    else:
+                        for k in ["login_server", "username"]:
+                            if k not in cfg["ssh"]:
+                                invalid_cfg=True
+                if invalid_cfg is True:
+                    continue
+
+                rcfgs[res_name] = cfg
+
+        except ValueError, err:
+            raise BadParameter("Couldn't parse resource configuration file '%s': %s." % (filename, str(err)))
+
+        return rcfgs
 
     def add_resource(self, rc):
         """Add a new resource to the current session
         """
         pass
 
-    def add_agent(self, rc):
+    def add_agent(self, uid, cfg):
         """Create a new BundleAgent instance
         """
-        if  rc['login_server'] in self._agent_list:
-            print "BundleAgent for {} already exists, try remove first".format(rc['login_server'])
+        if  uid in self._agent_list:
+            print "Failed! BundleAgent (uid={}) already exists - won't add a new one. Try remove it first.".format(uid)
             return None
 
-        try:
-            self._agent_list[rc['login_server']] = BundleAgent.create(
-                    resource_config=rc, dbs=self._dbs)
-            return self._agent_list[rc['login_server']]
-        except Exception as e:
-            print "Failed to creat new BundleAgent for {}:\n{}\n{}".format(
-                    rc['login_server'], str(e.__class__), str(e))
+        a = BundleAgent.create(uid=uid, cfg=cfg, dbs=self._dbs)
+
+        if a != None:
+            self._agent_list[uid] = a
+            return self._agent_list[uid]
+        else:
             return None
 
-    def remove_agent(self, resource_id):
+    def remove_agent(self, uid):
         """Stop/Delete BundleAgent instance
         """
-        if  resource_id not in self._agent_list:
-            print "BundleAgent {} doesn't exists".format(resource_id)
+        if  uid not in self._agent_list:
+            print "BundleAgent {} doesn't exists".format(uid)
             return
-        self._agent_list[resource_id].close()
-        del self._agent_list[resource_id]
+        self._agent_list[uid].close()
+        del self._agent_list[uid]
 
+    def publish_pyro_uri(self, uri):
+        self._dbs.update_pyro_uri(uri)
+
+    def add_network_monitor(self, agent_id, tgt, frequency=3600):
+        # ask the agent to remember the cfg of this tgt endpoint
+        self._agent_list[agent_id].add_bw_endpoint(tgt=tgt, cfg=self._endpoints[tgt])
+        # do a on-demand query
+        self._agent_list[agent_id].measure_bandwidth(tgt)

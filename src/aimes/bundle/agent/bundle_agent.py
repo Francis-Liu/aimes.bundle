@@ -14,29 +14,33 @@ import saga
 
 import paramiko
 
+import radical.utils as ru
+
 from aimes.bundle import BundleException
 
 
 class RemoteBundleAgent(threading.Thread):
-    def __init__(self, resource_config, dbs):
-        self._login_server = resource_config["login_server"]
-        self._username     = resource_config["username"]
-        self._password     = resource_config.get('password')
-        self._port         = resource_config.get('port', 22)
-        self._key_filename = resource_config.get('key_filename')
-        self._cluster_type = resource_config["cluster_type"]
+    def __init__(self, uid, cfg, dbs):
+        self._uid          = uid
+        self._login_server = cfg["ssh"]["login_server"]
+        self._username     = cfg["ssh"]["username"]
+        self._password     = cfg["ssh"].get('password')
+        self._port         = cfg["ssh"].get('port', 22)
+        self._key_filename = cfg["ssh"].get('key_filename')
+        self._cluster_type = cfg["cluster_type"]
         self._category     = type2category(self._cluster_type)
-        self._uid          = self._login_server
         self._dbs          = dbs
         self._sampling_interval = 60
         self._config       = None
         self._workload     = None
+        self._endpoints    = dict() # a dict of tgt:cfg 
         self._queue        = Queue.Queue()
+
+        self._tmp_bw_interval_count = 0
 
         threading.Thread.__init__(self, name=self._uid + " bundle agent")
 
         self.setup_ssh_connection()
-        # self.start_bw_server()
         self.start_timer()
         self.start_cmd_loop()
 
@@ -160,6 +164,12 @@ class RemoteBundleAgent(threading.Thread):
             elif cmd is "update_workload":
                 self._update_workload()
                 self._queue.task_done()
+            elif cmd.startswith("update_bandwidth"):
+                # We only allow one tgt to update its network measurement
+                # at a time, to avoid conflicts on the server side.
+                tgt = cmd.split()[1]
+                self.update_bandwidth(tgt)
+                self._queue.task_done()
             elif cmd is "close":
                 logging.debug("closing monitoring thread for {}".format(self._uid))
                 if self._timer:
@@ -189,44 +199,137 @@ class RemoteBundleAgent(threading.Thread):
         """
         return self._workload
 
-    def start_bw_server(self):
+    def add_bw_endpoint(self, tgt, cfg):
+        self._endpoints[tgt] = cfg
+
+    def run_bw_server(self):
         """Run an iperf program in server mode.
+
+        reference: http://saga-python.readthedocs.org/en/latest/tutorial/part5.html
         """
         REMOTE_JOB_ENDPOINT  = "ssh://"  + self._login_server
+        # TODO add session id
         REMOTE_DIR = "sftp://" + self._login_server + "/tmp/aimes.bundle/iperf/"
 
+        # set Context
         ctx = saga.Context("ssh")
         ctx.user_id  = self._username
         # ctx.user_key = "$HOME/.ssh/id_rsa.pub"
-        ctx.user_key = "/home/grad03/fengl/.ssh/id_rsa.pub"
+        # TODO find $HOME
+        # ctx.user_key = "/home/grad03/fengl/.ssh/id_rsa.pub"
 
-        session = saga.Session()
+        # set Session
+        session = saga.Session(default=False)
         session.add_context(ctx)
 
-        print "debug: {} {}".format(self._uid, self._username)
+        # staging necessary files
+        # remote mkdir
         workdir   = saga.filesystem.Directory(REMOTE_DIR, saga.filesystem.CREATE_PARENTS, session=session)
-        mbwrapper = saga.filesystem.File(
-                'file://localhost/%s/start-iperf-server-daemon.sh' % os.path.dirname(__file__))
-        mbwrapper.copy(workdir.get_url())
-        mbexe     = saga.filesystem.File(
-                'file://localhost/%s/../third_party/iperf-3.0.11-source.tar.gz' % os.path.dirname(__file__))
-        mbexe.copy(workdir.get_url())
+        file1 = saga.filesystem.File(
+                'file://localhost/%s/start-iperf-server-daemon.sh' % os.path.dirname(__file__), session=session)
+        file1.copy(workdir.get_url())
+        # file2     = saga.filesystem.File(
+        #         'file://localhost/%s/../third_party/iperf-3.0.11-source.tar.gz' % os.path.dirname(__file__), session=session)
+        # file2.copy(workdir.get_url())
 
+        # create a remote job service
         js = saga.job.Service(REMOTE_JOB_ENDPOINT, session=session)
-        jd = saga.job.Description()
 
-        jd.executable        = "./start-iperf-server-daemon.sh"
-        iperf_local_port     = 55201
-        jd.arguments         = [iperf_local_port]
+        # create job description
+        jd = saga.job.Description()
+        jd.working_directory = workdir.get_url().path
+        jd.executable    = 'sh'
+
+        iperf_local_port = 55201
+        jd.arguments     = ["start-iperf-server-daemon.sh", iperf_local_port]
+        jd.output        = "mysagajob.stdout"
+        jd.error         = "mysagajob.stderr"
 
         myjob = js.create_job(jd)
         myjob.run()
 
+        # while True:
+        #     jobstate = myjob.get_state()
+        #     print ' * Job %s status: %s' % (myjob.id, jobstate)
+        #     if jobstate in [saga.job.DONE, saga.job.FAILED]:
+        #         break
+        #     time.sleep(5)
+        # TODO check successful
+        myjob.wait()
+        print "Job State : %s" % (myjob.state)
+        print "Exitcode  : %s" % (myjob.exit_code)
+        workdir.copy("PORT", 'file://localhost/%s/' % os.getcwd())
+        f = open("PORT")
+        address, port = f.readline().strip().split()
+        print address, int(port)
+        return address, int(port)
+
+    def run_bw_client(self, src, dst, port):
+        cfg = self._endpoints[src]
+        # tmp solution
+
+        REMOTE_JOB_ENDPOINT  = "ssh://"  + cfg["ssh"]["login_server"]
+        # TODO add session id
+        # TODO reuse session
+        REMOTE_DIR = "sftp://" + cfg["ssh"]["login_server"] + "/tmp/aimes.bundle/iperf/"
+
+        # set Context
+        ctx = saga.Context("ssh")
+        ctx.user_id  = cfg["ssh"]["username"]
+
+        # set Session
+        session = saga.Session(default=False)
+        session.add_context(ctx)
+
+        with cfg["lock"]:
+            # staging necessary files
+            # remote mkdir
+            workdir   = saga.filesystem.Directory(REMOTE_DIR, saga.filesystem.CREATE_PARENTS, session=session)
+            file1 = saga.filesystem.File(
+                    'file://localhost/%s/run-iperf-client.sh' % os.path.dirname(__file__), session=session)
+            file1.copy(workdir.get_url())
+
+            # create a remote job service
+            js = saga.job.Service(REMOTE_JOB_ENDPOINT, session=session)
+
+            # create job description
+            jd = saga.job.Description()
+            jd.working_directory = workdir.get_url().path
+            jd.executable    = 'sh'
+            jd.arguments     = ["run-iperf-client.sh", src, dst, port]
+
+            myjob = js.create_job(jd)
+            myjob.run()
+
+            myjob.wait()
+            print "Job State : %s" % (myjob.state)
+            print "Exitcode  : %s" % (myjob.exit_code)
+
+            result_file = "{}-{}.json".format(src, dst)
+            workdir.copy( result_file, 'file://localhost/%s/' % os.getcwd() )
+            try:
+                result_dict = ru.read_json_str(result_file)
+                return result_dict["end"]["sum_sent"]["bits_per_second"], \
+                        result_dict["end"]["sum_received"]["bits_per_second"]
+
+            except Exception as e:
+                logging.exception("Parsing iperf result failed.")
+                return None, None
+
+    def measure_bandwidth(self, tgt):
+        """Do one-time bandwidth measurement, pop result to db
+        """
+        address, port = self.run_bw_server()
+        if  port != None:
+            send_bw, recv_bw = self.run_bw_client(src=tgt, dst=address, port=port)
+            print send_bw, recv_bw
+            self._dbs.update_bw(src=tgt, dst=self._uid, send_bw=send_bw, recv_bw=recv_bw)
+            return send_bw, recv_bw
 
 class MoabAgent(RemoteBundleAgent, threading.Thread): pass
 
 backdoor_cluster_num_nodes = {
-    'stampede.tacc.xsede.org'  : 6400, # https://www.tacc.utexas.edu/user-services/user-guides/stampede-user-guide
+    'login1.stampede.tacc.utexas.edu'  : 6400, # https://www.tacc.utexas.edu/user-services/user-guides/stampede-user-guide
     'gordon.sdsc.xsede.org'    : 1024, # http://www.sdsc.edu/supercomputing/gordon/using_gordon/allocations.html
     'hopper.sdsc.xsede.org'    : 1024, # https://www.nersc.gov/users/computations-systems/hopper/
     'hopper.nersc.gov'         : 6384, # https://www.nersc.gov/users/computational-systems/hopper/configuration/compute-nodes/
@@ -273,8 +376,8 @@ backdoor_hopper_queue_num_procs_limits = {
 class PbsAgent(RemoteBundleAgent, threading.Thread):
     """PBS HPC remote access bundle agent.
     """
-    def __init__(self, resource_config, dbs):
-        super(PbsAgent, self).__init__(resource_config, dbs)
+    def __init__(self, uid, cfg, dbs):
+        super(PbsAgent, self).__init__(uid, cfg, dbs)
 
     # def __del__(self):
     #     print "debug ({}): __del__() called".format(self._uid)
@@ -577,8 +680,8 @@ backdoor_stampede_queue_jobs_limits = {
 class SlurmAgent(RemoteBundleAgent):
     """Slurm HPC remote access bundle agent.
     """
-    def __init__(self, resource_config, dbs):
-        super(SlurmAgent, self).__init__(resource_config, dbs)
+    def __init__(self, uid, cfg, dbs):
+        super(SlurmAgent, self).__init__(uid, cfg, dbs)
 
     # def __del__(self):
     #     print "debug ({}): __del__() called".format(self._uid)
@@ -687,8 +790,8 @@ class SlurmAgent(RemoteBundleAgent):
 class CondorAgent(RemoteBundleAgent):
     """Condor Grid remote access bundle agent.
     """
-    def __init__(self, resource_config, dbs):
-        super(CondorAgent, self).__init__(resource_config, dbs)
+    def __init__(self, uid, cfg, dbs):
+        super(CondorAgent, self).__init__(uid, cfg, dbs)
 
     # def __del__(self):
     #     print "debug ({}): __del__() called".format(self._uid)
@@ -842,15 +945,19 @@ def type2category(Type):
     else:
         return None
 
-def create(resource_config, dbs):
+def create(uid, cfg, dbs):
     try:
-        ct = resource_config["cluster_type"].lower()
+        ct = cfg["cluster_type"].lower()
+
         if ct not in supported_types:
             logging.error("Unknown cluster type: {}".format(ct))
             return None
+
         return supported_types[ct](
-                resource_config=resource_config,
+                uid=uid,
+                cfg=cfg,
                 dbs=dbs)
+
     except Exception as e:
         logging.exception('Bundle agent creat Failed!')
         return None

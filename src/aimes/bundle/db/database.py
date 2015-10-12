@@ -9,9 +9,9 @@ Examples:
     db.session <--metadata=[
                             [_id=session_id,created_time,DBVersion,...]
                            ]
-    db.session.resource <--resource_list=[
-                            [_id=x,cluster_type,login_server],
-                            [_id=y,cluster_type,login_server],
+    db.session.resource <--resource_cfgs=[
+                            [_id=x,cluster_type,ssh:[login_server,username]],
+                            [_id=y,cluster_type,ssh:[login_server,username]],
                             ...
                            ]
     db.session.resource.config <--static=[
@@ -44,7 +44,7 @@ import datetime
 import pymongo
 
 import radical.utils as ru
-from   radical.pilot.utils import DBConnectionInfo
+# from   radical.pilot.utils import DBConnectionInfo
 
 def ip2id (ip) :
     return ip.replace('.', "_DOT_")
@@ -101,14 +101,15 @@ class Session():
         dbs = Session(db_url, db_name)
         session_metadata = dbs._create(sid, creation_time)
 
-        connection_info = DBConnectionInfo(
-            session_id=sid,
-            dbname=dbs._dbname,
-            dbauth=dbs._dbauth,
-            dburl=dbs._dburl
-        )
+        # connection_info = DBConnectionInfo(
+        #     session_id=sid,
+        #     dbname=dbs._dbname,
+        #     dbauth=dbs._dbauth,
+        #     dburl=dbs._dburl
+        # )
 
-        return (dbs, session_metadata, connection_info)
+        # return (dbs, session_metadata, connection_info)
+        return (dbs, session_metadata)
 
     def _create(self, sid, creation_time):
         """Creates a new session.
@@ -142,14 +143,15 @@ class Session():
         dbs = Session(db_url=db_url, db_name=db_name)
         session_metadata = dbs._reconnect(sid)
 
-        connection_info = DBConnectionInfo(
-            session_id=sid,
-            dbname=dbs._dbname,
-            dbauth=dbs._dbauth,
-            dburl=dbs._dburl
-        )
+        # connection_info = DBConnectionInfo(
+        #     session_id=sid,
+        #     dbname=dbs._dbname,
+        #     dbauth=dbs._dbauth,
+        #     dburl=dbs._dburl
+        # )
 
-        return (dbs, session_metadata, connection_info)
+        # return (dbs, session_metadata, connection_info)
+        return (dbs, session_metadata)
 
     def _reconnect(self, sid):
         """Reconnects to an existing session (private).
@@ -184,7 +186,8 @@ class Session():
     ####################################################################
     #                    Server-side methods                           #
     ####################################################################
-    def add_resource_list(self, resource_list):
+
+    def add_resource_cfgs(self, resource_cfgs):
         """Add resource list to db.session.resource.
 
         The "login_server" field is used to uniquely identify
@@ -192,9 +195,11 @@ class Session():
         ip2id() to replace '.' with '_DOT_'.
         """
         # TODO support merge with existing records
-        docs = resource_list.values()
-        for d in docs:
-            d["_id"] = ip2id(d["login_server"])
+        docs = list()
+
+        for res_name, cfg in resource_cfgs.iteritems():
+            cfg["_id"] = ip2id(res_name)
+            docs.append(cfg)
 
         self._r.insert(docs)
 
@@ -209,22 +214,49 @@ class Session():
         self._rw.update(
                 {"resource_id" : workload["resource_id"]}, workload, upsert=True)
 
+    def update_pyro_uri(self, uri):
+        self._s.update(
+                {"_id" : self._session_id}, {"$set" : {"pyro_uri" : uri}})
+
+    def update_bw(self, src, dst, send_bw, recv_bw):
+        doc = { "timestamp" : datetime.datetime.utcnow(), \
+                "src"       : src, \
+                "dst"       : dst, \
+                "send_bw"   : send_bw, \
+                "recv_bw"   : recv_bw }
+        self._bw.insert(doc)
+
     ####################################################################
     #                    Client-side methods                           #
     ####################################################################
+
     def register_bundle_manager(self, bm_id, ip_addr):
         self._bm_id = bm_id
         doc = {"_id" : self._bm_id, "ip_addr" : ip_addr}
         self._bm.update({"_id" : self._bm_id}, doc, upsert=True)
 
-    def get_resource_list(self):
-        resource_list = []
-        for r in self._r.find():
-            resource_list.append( id2ip(str(r['_id'])) )
-        return resource_list
+    def get_resource_cfgs(self):
+        resource_cfgs = dict()
+        for cfg in self._r.find():
+            resource_cfgs[id2ip(str(cfg['_id']))] = cfg
+        return resource_cfgs
 
     def get_resource_config(self, resource_name):
+        print "debug ", ip2id(resource_name)
         return self._rc.find_one({"_id": ip2id(resource_name)})
 
     def get_resource_workload(self, resource_name):
         return self._rw.find_one({"resource_id": resource_name})
+
+    def get_pyro_uri(self):
+        metadata = self._s.find_one({"_id": self._session_id})
+        return metadata["pyro_uri"]
+
+    def get_bw(self, resource_name, tgt, direction):
+        try:
+            if direction == "in":
+                return self._bw.find_one( {"dst" : resource_name, "src" : tgt} )["send_bw"]
+            else:
+                return self._bw.find_one( {"dst" : resource_name, "src" : tgt} )["recv_bw"]
+        except Exception as e:
+            return None

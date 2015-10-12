@@ -23,21 +23,26 @@ class ResourceBundle(object):
 
     def refresh_data(self):
         self.resources = {}
-        self.resource_list = self._dbs.get_resource_list()
+        resource_cfgs = self._dbs.get_resource_cfgs()
+        for res_name, cfg in resource_cfgs.iteritems():
+            if cfg["bundle_agent"] == True:
+                self.resource_list.append(res_name)
+
         for resource_name in self.resource_list:
 
             config   = self._dbs.get_resource_config(resource_name)
             workload = self._dbs.get_resource_workload(resource_name)
 
-            self.resources[resource_name] = Resource(resource_name, config, workload)
+            self.resources[resource_name] = Resource(resource_name, config, workload, self._dbs)
 
 
 class Resource(UserDict):
-    def __init__(self, name, config, workload):
+    def __init__(self, name, config, workload, dbs):
         UserDict.__init__(self)
         self.name           = name
         self.num_nodes      = config['num_nodes']
         self.category       = config['category']
+        self._dbs           = dbs
         self.update_time    = workload['timestamp']
         self["name"]        = self.name
         self['num_nodes']   = self.num_nodes
@@ -65,6 +70,9 @@ class Resource(UserDict):
                                              config['site_info'][site_name],
                                              workload[site_name])
             self['sites'] = self.sites
+
+    def get_bandwidth(self, tgt, mode):
+        return self._dbs.get_bw(resource_name=self.name, tgt=tgt, direction=mode)
 
 
 class Queue(object):

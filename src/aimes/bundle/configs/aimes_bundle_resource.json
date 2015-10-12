@@ -1,0 +1,50 @@
+{
+    "stampede" : {
+        "bundle_agent" : true,
+        "cluster_type" : "slurm",
+        "ssh" :
+        {
+            "login_server" : "login1.stampede.tacc.utexas.edu",
+            "username" : "liux2102"
+        }
+    },
+
+    "gordon" : {
+        "bundle_agent" : true,
+        "cluster_type" : "pbs",
+        "ssh" :
+        {
+            "login_server" : "gordon.sdsc.xsede.org",
+            "username" : "liux2102"
+        }
+    },
+
+    "hopper" : {
+        "bundle_agent" : true,
+        "cluster_type" : "pbs",
+        "ssh" :
+        {
+            "login_server" : "hopper.nersc.gov",
+            "username" : "liux2102"
+        }
+    },
+
+    "osg" : {
+        "bundle_agent" : true,
+        "cluster_type" : "condor",
+        "ssh" :
+        {
+            "login_server" : "login.osgconnect.net",
+            "username" : "jtqv84"
+        }
+    },
+
+    "csel-kh1250-25" : {
+        "bundle_agent" : false,
+        "ssh" :
+        {
+            "login_server" : "csel-kh1250-25.cselabs.umn.edu",
+            "username" : "liux2102"
+        }
+    }
+}
