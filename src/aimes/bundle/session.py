@@ -119,7 +119,48 @@ class Session(object):
             print "  session_id    = ", self._uid
 
         else:
-            # TODO reconnect to existing session
+            # reconnect to existing session
+            print "Reconnecting to existing AIMES.Bundle server session: ", self._uid
+            print "Step (1 of 3): reconnecting to last database session   ...",
+            try:
+                self._dbs, self._dbs_metadata = \
+                        dbSession.reconnect(sid     = self._uid,
+                                            db_url  = self._database_url,
+                                            db_name = database_name)
+            except Exception as e:
+                print "Failed"
+                logging.exception("{}:{}".format(str(e.__class__), str(e)))
+                raise BundleException("Session.__init__: db setup Failed!")
+            print "Done"
+
+            print "Step (2 of 3): loading existing resource configrations ...",
+            self._resource_cfgs = self._dbs.get_resource_cfgs()
+            # TODO check if it's empty
+            print "Done"
+
+            print "Step (3 of 3): starting bundle agents                  ..."
+            for res_name, cfg in self._resource_cfgs.iteritems():
+                if not cfg["bundle_agent"]:
+                    # This is an endpoint
+                    self._endpoints[res_name] = cfg
+                    self._endpoints[res_name]["lock"] = threading.Lock()
+                    continue
+
+                print "adding {}".format(res_name)
+
+                if self.add_agent(res_name, cfg) != None:
+                    print "{} added".format(res_name)
+                else:
+                    print "{} not added".format(res_name)
+
+            print "Step (3 of 3): starting bundle agents                  ...",
+            print "Done"
+
+            print "Connect to this Session using:"
+            print "  db_url        = ", self._database_url
+            print "  database_name = ", self._database_name
+            print "  session_id    = ", self._uid
+
             return
 
     def close(self, cleanup=True, terminate=True, delete=None):
@@ -140,7 +181,7 @@ class Session(object):
         """Load all resource logins from one config file to a dict.
         """
         _valid_p     = ['cluster_type', 'login_server', 'username',
-                        'password', 'key_file']
+                        'password', 'key_file', "config"]
         rcfgs = {}
 
         try:

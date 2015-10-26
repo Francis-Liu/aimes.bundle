@@ -1,0 +1,102 @@
+{
+    "cluster_bandwidth": {
+        "cameo_merzky_net": {
+            "54_196_51_239": {
+                "out": 26.0
+            }
+        }
+    },
+    "cluster_config": {
+        "cameo_merzky_net": {
+            "num_nodes": 6400,
+            "queue_info": {
+                "development": {
+                    "max_walltime"      : 432000,
+                    "num_procs_limit"   : 256,
+                    "queue_name"        : "development",
+                    "queued_jobs_limit" : 1
+                },
+                "large": {
+                    "max_walltime"      : 432000,
+                    "num_procs_limit"   : 16384,
+                    "queue_name"        : "large",
+                    "queued_jobs_limit" : 50
+                },
+                "largemem": {
+                    "max_walltime"      : 432000,
+                    "num_procs_limit"   : 128,
+                    "queue_name"        : "largemem",
+                    "queued_jobs_limit" : 4
+                },
+                "normal": {
+                    "max_walltime"      : 432000,
+                    "num_procs_limit"   : 4096,
+                    "queue_name"        : "normal",
+                    "queued_jobs_limit" : 50
+                },
+                "serial": {
+                    "max_walltime"      : 432000,
+                    "num_procs_limit"   : 16,
+                    "queue_name"        : "serial",
+                    "queued_jobs_limit" : 8
+                }
+            }
+        }
+    },
+    "cluster_list": ["cameo.merzky.net"],
+    "cluster_workload": {
+        "cameo_merzky_net": {
+            "development": {
+                "alive_nodes"        :   148,
+                "alive_procs"        :  2368,
+                "busy_nodes"         :   129,
+                "busy_procs"         :  2064,
+                "free_nodes"         :    19,
+                "free_procs"         :   304,
+                "num_queueing_jobs"  :     0,
+                "num_running_jobs"   :    32
+            },
+            "large": {
+                "alive_nodes"        :  6041,
+                "alive_procs"        : 96656,
+                "busy_nodes"         :  5770,
+                "busy_procs"         : 92320,
+                "free_nodes"         :   271,
+                "free_procs"         :  4336,
+                "num_queueing_jobs"  :     1,
+                "num_running_jobs"   :     0
+            },
+            "largemem": {
+                "alive_nodes"        :    16,
+                "alive_procs"        :   512,
+                "busy_nodes"         :    16,
+                "busy_procs"         :   512,
+                "free_nodes"         :     0,
+                "free_procs"         :     0,
+                "num_queueing_jobs"  :    34,
+                "num_running_jobs"   :     7
+            },
+            "normal": {
+                "alive_nodes"        :  6041,
+                "alive_procs"        : 96656,
+                "busy_nodes"         :  5770,
+                "busy_procs"         : 92320,
+                "free_nodes"         :   271,
+                "free_procs"         :  4336,
+                "num_queueing_jobs"  :   947,
+                "num_running_jobs"   :   646
+            },
+            "serial": {
+                "alive_nodes"        :    60,
+                "alive_procs"        :   960,
+                "busy_nodes"         :    60,
+                "busy_procs"         :   960,
+                "free_nodes"         :     0,
+                "free_procs"         :     0,
+                "num_queueing_jobs"  :     0,
+                "num_running_jobs"   :     9
+            }
+        }
+    }
+}
+

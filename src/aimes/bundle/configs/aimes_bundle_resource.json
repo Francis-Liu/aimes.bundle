@@ -46,5 +46,11 @@
             "login_server" : "csel-kh1250-25.cselabs.umn.edu",
             "username" : "liux2102"
         }
+    },
+
+    "cameo" : {
+        "bundle_agent" : true,
+        "cluster_type" : "config",
+        "config"       : "/home/merzky/saga/aimes.bundle/etc/cameo.merzky.net.json"
     }
 }

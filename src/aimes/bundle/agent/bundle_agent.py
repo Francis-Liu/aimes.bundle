@@ -930,11 +930,43 @@ class CondorAgent(RemoteBundleAgent):
             return None
 
 
+class ConfigAgent(object):
+    # TODO connect to db
+    my_type = 'config'
+
+    # --------------------------------------------------------------------------
+    def __init__(self, uid, cfg, dbs):
+        self.uid  = uid
+        self._cfg = ru.read_json (credential['config'])
+        self._dbs = dbs
+
+    # --------------------------------------------------------------------------
+    def get_configuration(self):
+        return {
+            'num_nodes' : self._cfg['cluster_config'][self._hostname]['num_nodes'],
+            'queue_info': self._cfg['cluster_config'][self._hostname]['queue_info']
+        }
+
+    # --------------------------------------------------------------------------
+    def get_queue_config(self, flag=0):
+        return self._cfg['cluster_config'][self._hostname]['queue_info']
+
+    # --------------------------------------------------------------------------
+    def get_workload(self):
+        return self._cfg['cluster_workload'][self._hostname]
+
+    # --------------------------------------------------------------------------
+    @property
+    def num_nodes(self):
+        return self._cfg['cluster_config'][self._hostname]['num_nodes']
+
+
 supported_types = {
     "moab"     : MoabAgent,
     "pbs"      : PbsAgent,
     "slurm"    : SlurmAgent,
     "condor"   : CondorAgent,
+    "config"   : ConfigAgent
 }
 
 def type2category(Type):

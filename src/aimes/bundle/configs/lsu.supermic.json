@@ -1,0 +1,29 @@
+{
+    "cluster_bandwidth": {
+        "supermic_cct-lsu_xsede_org": {
+            "54_196_51_239": {
+                "out": 26.0
+            }
+        }
+    },
+    "cluster_config": {
+        "": {
+            "num_nodes": 380,
+            "queue_info": {
+                "workq": {
+                    "max_walltime"      : 259200,
+                    "num_procs_limit"   : 2560,
+                    "queue_name"        : "workq",
+                    "queued_jobs_limit" : 4
+                },
+                "checkpt": {
+                    "max_walltime"      : 259200,
+                    "num_procs_limit"   : 4000,
+                    "queue_name"        : "large"
+                }
+            }
+        }
+    },
+    "cluster_list": ["supermic.cct-lsu.xsede.org"]
+}
+
